@@ -49,7 +49,7 @@ memory_context_budget = 4000
 compaction_daily_limit = 24
 
 # 每小时调用保险丝（全群合计上限）。
-hourly_call_budget = 60
+hourly_call_budget = 120
 
 # 泄洪（一轮内消息洪峰的摘要合并）开关。
 flood_enabled = true
@@ -64,7 +64,7 @@ session_rotation_enabled = true
 # 额度降级开关（默认开）。开时 pacing 档位会真实收紧认领与上限；
 # 关掉后额度只显示不干预（档位照常计算并以 raw_tier 上报）。
 # 额度真正耗尽不归这个开关管。
-quota_degradation_enabled = true
+quota_degradation_enabled = false
 
 # 常驻会话重生退避开关（默认开）。关掉后会话退役后立即重生，代价是
 # 确定性失败（如内容过滤反复触发）时会热重生，靠陈旧护栏收敛。
