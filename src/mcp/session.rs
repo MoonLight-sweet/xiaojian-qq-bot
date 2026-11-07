@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
+use crate::mcp::extras;
 use crate::mcp::memory::{self, Scope};
 use crate::mcp::stickers;
 use crate::mcp::submit;
@@ -225,6 +226,11 @@ impl Session {
             {
                 tools.extend(extra.iter().cloned());
             }
+            if !self.submit_only
+                && let Some(extra) = extras::tool_definitions().as_array()
+            {
+                tools.extend(extra.iter().cloned());
+            }
             tools.push(submit::tool_definition());
             self.audit_wire(
                 store,
@@ -317,6 +323,9 @@ impl Session {
             stickers::KEEP_TOOL => {
                 stickers::call_keep(store, &scope.bot_id, Some(&scope.group_id), &args).await
             }
+            extras::BILIBILI_TOOL => extras::call_bilibili(store, &scope, &args).await,
+            extras::PROFILE_TOOL => extras::call_profile_update(store, &scope, &args).await,
+            extras::QZONE_TOOL => extras::call_qzone_publish(store, &scope, &args).await,
             submit::TOOL_NAME => submit::call_submit(store, &scope, &args).await,
             _ => return memory::handle(store, &scope, frame).await,
         };
@@ -398,7 +407,13 @@ pub fn resolve_scope_from(roots: &[String], env: Option<&str>) -> Option<Scope> 
 
 /// Accept either a bare object or a `file://` path prefix from the client.
 pub fn strip_file_uri(uri: &str) -> String {
-    uri.strip_prefix("file://").unwrap_or(uri).to_string()
+    let stripped = uri.strip_prefix("file://").unwrap_or(uri);
+    let bytes = stripped.as_bytes();
+    if bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':' {
+        stripped[1..].to_string()
+    } else {
+        stripped.to_string()
+    }
 }
 
 /// Parse the tiny scope file. Both halves must be present and non-empty.

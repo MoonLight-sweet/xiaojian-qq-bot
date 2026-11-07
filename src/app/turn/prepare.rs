@@ -535,12 +535,28 @@ impl TurnExecutor {
             if let Some(target) = &message.quote_of
                 && !batch_ids.contains(target.as_str())
                 && !quote_summaries.contains_key(target)
-                && let Ok(Some(logged)) = self
+            {
+                if let Ok(Some(logged)) = self
                     .store
                     .group_message_text(&self.bot_id, &job.group_id, target)
                     .await
-            {
-                quote_summaries.insert(target.clone(), quote_summary(&logged));
+                {
+                    quote_summaries.insert(target.clone(), quote_summary(&logged));
+                } else {
+                    let param = target
+                        .parse::<i64>()
+                        .map(|n| serde_json::json!({ "message_id": n }))
+                        .unwrap_or_else(|_| serde_json::json!({ "message_id": target }));
+                    if let Ok(val) = self
+                        .connection
+                        .call_data("get_msg", param, std::time::Duration::from_millis(1500))
+                        .await
+                    {
+                        if let Some(quoted) = extract_quote_from_onebot_json(&val) {
+                            quote_summaries.insert(target.clone(), quote_summary(&quoted));
+                        }
+                    }
+                }
             }
         }
         let (mut prompt_batch, mut scope) = build_prompt_batch(
@@ -665,5 +681,55 @@ impl TurnExecutor {
             turn_token,
             is_first_turn: group.agy_conversation_id.is_none(),
         })
+    }
+}
+
+
+fn extract_quote_from_onebot_json(val: &serde_json::Value) -> Option<String> {
+    let sender_name = val.get("sender").and_then(|s| {
+        let card = s.get("card").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if !card.is_empty() {
+            Some(card.to_string())
+        } else {
+            let nick = s.get("nickname").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if !nick.is_empty() {
+                Some(nick.to_string())
+            } else {
+                None
+            }
+        }
+    });
+
+    let mut body = String::new();
+    if let Some(arr) = val.get("message").and_then(|m| m.as_array()) {
+        for seg in arr {
+            let seg_type = seg.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let data = seg.get("data");
+            match seg_type {
+                "text" => {
+                    if let Some(t) = data.and_then(|d| d.get("text")).and_then(|t| t.as_str()) {
+                        body.push_str(t);
+                    }
+                }
+                "image" => body.push_str("[图片]"),
+                "face" => body.push_str("[表情]"),
+                "mface" => body.push_str("[表情包]"),
+                "record" => body.push_str("[语音]"),
+                _ => {}
+            }
+        }
+    } else if let Some(raw) = val.get("raw_message").and_then(|r| r.as_str()) {
+        body.push_str(raw);
+    }
+
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(sender) = sender_name {
+        Some(format!("{}: {}", sender, trimmed))
+    } else {
+        Some(trimmed.to_string())
     }
 }

@@ -598,11 +598,11 @@ pub fn build_prompt_batch(
             None => message.text.clone(),
             Some(target) => {
                 let note = if let Some(&position) = batch_positions.get(target.as_str()) {
-                    format!("（引用 m{}）", position + 1)
+                    format!("（回复 m{}）", position + 1)
                 } else if let Some(summary) = quote_summaries.get(target) {
-                    format!("（引用更早的消息：「{summary}」）")
+                    format!("（回复消息“{summary}”）")
                 } else {
-                    "（引用了更早的一条消息）".to_string()
+                    "（回复了一条历史消息）".to_string()
                 };
                 format!("{}{note}", message.text)
             }

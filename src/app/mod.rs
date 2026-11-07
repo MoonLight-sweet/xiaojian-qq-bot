@@ -738,6 +738,161 @@ impl App {
             }
         });
 
+        // Proactive daytime chat scheduler: between 09:00 and 23:00 (UTC+8), randomly
+        // every 1–3 hours when a group is quiet, trigger an autonomous topic / Bilibili
+        // share turn. Pauses after 2 consecutive unanswered proactive turns until a
+        // group member speaks again.
+        let proactive_self = Arc::clone(&self);
+        tokio::spawn(async move {
+            struct ProactiveGroupState {
+                next_due_at: i64,
+                unanswered_count: u32,
+                last_seen_user_msg_id: i64,
+            }
+            let mut states: std::collections::HashMap<String, ProactiveGroupState> =
+                std::collections::HashMap::new();
+            let mut seed_counter: u64 = 1;
+            let mut random_delay = || -> i64 {
+                seed_counter = seed_counter.wrapping_add(1);
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0);
+                let mixed = (nanos ^ seed_counter.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+                    .wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                3600 + (mixed % 7201) as i64
+            };
+
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let now = crate::now_unix();
+                let bj_hour = ((now + 8 * 3600).rem_euclid(86400)) / 3600;
+                if !(9..23).contains(&bj_hour) {
+                    continue;
+                }
+                let groups = proactive_self
+                    .store
+                    .list_groups(&proactive_self.config.bot_id)
+                    .await
+                    .unwrap_or_default();
+                for group in groups {
+                    if !group.enabled || group.paused {
+                        continue;
+                    }
+                    let recent = proactive_self
+                        .store
+                        .recent_group_messages(&proactive_self.config.bot_id, &group.group_id, 20)
+                        .await
+                        .unwrap_or_default();
+                    let last_user_msg = recent.iter().rev().find(|m| m.speaker_role != "bot");
+                    let last_user_id = last_user_msg.map(|m| m.id).unwrap_or(0);
+                    let last_user_ts = last_user_msg.map(|m| m.created_at).unwrap_or(now);
+
+                    let delay = random_delay();
+                    let state = states.entry(group.group_id.clone()).or_insert_with(|| {
+                        ProactiveGroupState {
+                            next_due_at: now + delay,
+                            unanswered_count: 0,
+                            last_seen_user_msg_id: last_user_id,
+                        }
+                    });
+
+                    if last_user_id > state.last_seen_user_msg_id {
+                        state.last_seen_user_msg_id = last_user_id;
+                        state.unanswered_count = 0;
+                        let next_candidate = last_user_ts + delay;
+                        if state.next_due_at < next_candidate {
+                            state.next_due_at = next_candidate;
+                        }
+                    }
+
+                    if state.unanswered_count >= 2 || now < state.next_due_at {
+                        continue;
+                    }
+
+                    if proactive_self
+                        .executor
+                        .running_turns
+                        .snapshot()
+                        .iter()
+                        .any(|(g, _)| g == &group.group_id)
+                    {
+                        continue;
+                    }
+                    let has_pending = proactive_self
+                        .store
+                        .pending_count(&proactive_self.config.bot_id, &group.group_id)
+                        .await
+                        .map(|n| n > 0)
+                        .unwrap_or(true);
+                    if has_pending {
+                        continue;
+                    }
+
+                    let speaker_ref = proactive_self
+                        .store
+                        .ensure_member(
+                            &proactive_self.config.bot_id,
+                            &group.group_id,
+                            &proactive_self.config.owner_qq_id,
+                            now,
+                        )
+                        .await
+                        .unwrap_or_else(|_| "u1".to_string());
+                    let msg_id = format!("proactive-{}-{now}", group.group_id);
+                    let text = "【系统内部主动话题触发（群友不可见，切勿引用m1，切勿提起系统或主人）】现在是白天闲聊时间，群里已经安静有一会儿了。请你主动在群里开启一个自然轻松的话题，或者先用 call_mcp_tool 调用 bilibili_browse(mode=\"popular\") 或 bilibili_browse(mode=\"comments\") 刷一下B站热门视频和评论区神评，顺手把评论区好玩的梗图/表情包收进你的表情库并用 sticker_ops 发出来跟群友吐槽；如果很有感触也可以顺手调 qzone_publish 发条空间说说。注意：直接对群里大家说话，不要叫主人，quote_ref 必须留空！".to_string();
+                    let synthetic = crate::onebot::normalize::IncomingMessage {
+                        bot_id: proactive_self.config.bot_id.clone(),
+                        group_id: group.group_id.clone(),
+                        message_id: msg_id.clone(),
+                        sender_id: proactive_self.config.owner_qq_id.clone(),
+                        speaker_ref,
+                        speaker_role: crate::onebot::normalize::SpeakerRole::Owner,
+                        display_name: "系统定时触发".to_string(),
+                        known_alias: None,
+                        received_at: now,
+                        segments: vec![crate::onebot::normalize::Segment::Text {
+                            text: text.clone(),
+                        }],
+                        text,
+                        mentions_bot: true,
+                        quote_of: None,
+                    };
+                    if let Ok(payload) = serde_json::to_string(&synthetic) {
+                        if let Ok(true) = proactive_self
+                            .store
+                            .insert_pending(
+                                &proactive_self.config.bot_id,
+                                &group.group_id,
+                                &msg_id,
+                                &proactive_self.config.owner_qq_id,
+                                now,
+                                &payload,
+                                "[]",
+                            )
+                            .await
+                        {
+                            state.unanswered_count += 1;
+                            state.next_due_at = now + random_delay();
+                            let _ = proactive_self
+                                .store
+                                .audit(
+                                    "system",
+                                    &format!(
+                                        "proactive.chat.triggered.g{}.try{}",
+                                        group.group_id, state.unanswered_count
+                                    ),
+                                    Some(&proactive_self.config.bot_id),
+                                    Some(&group.group_id),
+                                    now,
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+        });
+
         admin
             .await
             .map_err(|e| BotError::Message(format!("admin server join: {e}")))?;

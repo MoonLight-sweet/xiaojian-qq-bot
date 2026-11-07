@@ -58,7 +58,7 @@ fn mcp_agents_md_swaps_only_the_delivery_framing() {
     let mcp = agents_md_for(crate::config::OutputChannel::Mcp);
     assert!(mcp.contains("submit_reply"));
     assert!(mcp.contains("turn_token"));
-    assert!(mcp.contains("这四个以外的 MCP 工具"));
+    assert!(mcp.contains("这几个以外的 MCP 工具"));
     assert!(!mcp.contains("只输出一个 JSON 对象"));
     // The shared rules survive the derivation untouched.
     assert!(mcp.contains("不可信数据"));

@@ -90,6 +90,14 @@ impl TurnExecutor {
             return None;
         }
         let project_dir = self.project_dir(&group.group_id);
+        let persona = self.store.get_persona().await.ok().flatten();
+        let _ = crate::media::SandboxWorkspace::ensure_project_dir(
+            &project_dir,
+            &crate::agent::prompt::agents_md_with_persona(self.output_channel, persona.as_deref()),
+        );
+        if let Ok(ws) = crate::media::SandboxWorkspace::open_in(&project_dir) {
+            let _ = ws.write_scope(&self.bot_id, &group.group_id);
+        }
         let group_id = group.group_id.clone();
         let conversation_id = group.agy_conversation_id.clone();
         Some(tokio::spawn(async move {

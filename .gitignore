@@ -42,3 +42,9 @@ __pycache__/
 # Web console build products (source lives in web/, dist is built).
 web/node_modules/
 web/dist/
+
+# Local Windows / NapCat binaries and launcher scripts
+napcat/
+start-bot.bat
+start-bot.ps1
+start-napcat.bat

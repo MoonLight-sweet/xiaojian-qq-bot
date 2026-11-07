@@ -446,7 +446,7 @@ fn classify(
                 )));
             };
             let mut ev = StepEvent::new(idx, "user", stype);
-            ev.text = text;
+            ev.text = text.replace('\0', "");
             ev
         }
         STEP_MODEL => {

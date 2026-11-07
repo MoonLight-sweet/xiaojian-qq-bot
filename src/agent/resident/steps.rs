@@ -55,7 +55,10 @@ pub fn strip_ansi(text: &str) -> String {
 
 /// Collapse whitespace runs to single spaces and trim.
 pub fn normalized(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.replace('\0', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Whether a step's text is the prompt that was delivered.

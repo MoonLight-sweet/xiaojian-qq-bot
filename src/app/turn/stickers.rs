@@ -157,7 +157,7 @@ pub(crate) fn quote_summary(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
-        .take(40)
+        .take(120)
         .collect()
 }
 

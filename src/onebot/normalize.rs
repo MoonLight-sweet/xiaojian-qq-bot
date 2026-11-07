@@ -413,11 +413,41 @@ pub fn normalize_segments(event: &RawEvent, bot_id: &str) -> Vec<Segment> {
                         sub_type: seg.data.as_ref().and_then(|d| d.sub_type.clone()),
                     }),
                     "record" => Some(Segment::Voice),
+                    "face" => {
+                        let id_str = seg.data.as_ref().and_then(|d| d.id.clone()).unwrap_or_default();
+                        Some(Segment::Text {
+                            text: if id_str.is_empty() {
+                                "[表情]".to_string()
+                            } else {
+                                format!("[表情:{}]", id_str)
+                            },
+                        })
+                    }
+                    "mface" => {
+                        let summary = seg.data.as_ref().and_then(|d| d.summary.clone()).unwrap_or_default();
+                        let url = seg.data.as_ref().and_then(|d| d.url.clone());
+                        if !summary.is_empty() {
+                            let text = if summary.starts_with('[') && summary.ends_with(']') {
+                                summary
+                            } else {
+                                format!("[{}]", summary)
+                            };
+                            Some(Segment::Text { text })
+                        } else if let Some(url) = url {
+                            Some(Segment::Image {
+                                url: Some(url),
+                                file: seg.data.as_ref().and_then(|d| d.file.clone()),
+                                sub_type: Some("1".to_string()),
+                            })
+                        } else {
+                            Some(Segment::Text { text: "[动画表情]".to_string() })
+                        }
+                    }
                     // Pokes are handled at the event level (see the scan in
                     // `normalize_event`): as a segment they carry no content
                     // of their own.
                     "poke" => None,
-                    // `face`, `reply`, `forward`, `video`, ... are not
+                    // `reply`, `forward`, `video`, ... are not
                     // modeled; they are surfaced as unsupported instead of being
                     // silently converted into text.
                     other => Some(Segment::Unsupported {

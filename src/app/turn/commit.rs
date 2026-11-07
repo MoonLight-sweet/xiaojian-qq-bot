@@ -413,10 +413,13 @@ impl TurnExecutor {
                 .map(|t| t.message_id.clone())
         };
         let mut quote_target: Option<String> = if self.quote_enabled {
-            quote_ref.as_ref().and_then(|r| match resolve_source(r) {
-                Some(id) => Some(id),
-                None => resolve_history(r),
-            })
+            quote_ref
+                .as_ref()
+                .and_then(|r| match resolve_source(r) {
+                    Some(id) => Some(id),
+                    None => resolve_history(r),
+                })
+                .filter(|id| !id.starts_with("proactive-"))
         } else {
             None
         };
@@ -771,7 +774,7 @@ impl TurnExecutor {
                     None
                 };
                 match resolved {
-                    Some((message_id, None)) => {
+                    Some((message_id, None)) if !message_id.starts_with("proactive-") => {
                         part_quote_ids[idx] = Some(message_id);
                         let _ = self
                             .store
@@ -787,6 +790,7 @@ impl TurnExecutor {
                             )
                             .await;
                     }
+                    Some((_, None)) => {}
                     Some((_, Some(reason))) => {
                         let _ = self
                             .store

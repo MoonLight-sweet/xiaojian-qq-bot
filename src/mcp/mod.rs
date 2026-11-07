@@ -12,6 +12,7 @@
 //! Both are scoped by the workspace `scope.json` handed over via MCP roots, never by a
 //! tool argument: a model that could pass a group id could read another group.
 
+pub mod extras;
 pub mod memory;
 pub mod session;
 pub mod stickers;

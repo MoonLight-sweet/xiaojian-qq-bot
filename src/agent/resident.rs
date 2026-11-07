@@ -364,6 +364,29 @@ impl ResidentSession {
         for (key, value) in env_source.child_env(&|k| std::env::var(k).ok()) {
             cmd.env(key, value);
         }
+        #[cfg(windows)]
+        {
+            for key in [
+                "SystemRoot",
+                "SYSTEMDRIVE",
+                "WINDIR",
+                "COMSPEC",
+                "PATHEXT",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "PROGRAMDATA",
+                "TEMP",
+                "TMP",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+            ] {
+                if let Ok(val) = std::env::var(key) {
+                    cmd.env(key, val);
+                }
+            }
+            cmd.env("USERPROFILE", &config.home);
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("TMPDIR", &config.workspace);
         // Explicit assignment, not an allowlist inherit: the parent process does
@@ -371,6 +394,7 @@ impl ResidentSession {
         if let Some(scope) = &config.memory_scope {
             cmd.env(crate::mcp::MEMORY_SCOPE_ENV, scope);
         }
+        let _ = std::fs::create_dir_all(&config.workspace);
         cmd.cwd(&config.workspace);
 
         let child = pair
@@ -536,7 +560,21 @@ impl ResidentSession {
         let started = Instant::now();
         let mut last_digest = String::new();
         let mut last_change = Instant::now();
+        let mut dsr_answered = 0usize;
         loop {
+            let dsr_count = self
+                .screen
+                .lock()
+                .map(|buf| buf.windows(4).filter(|w| *w == b"\x1b[6n").count())
+                .unwrap_or(0);
+            if dsr_count > dsr_answered {
+                let mut inner = self.inner.lock().await;
+                for _ in dsr_answered..dsr_count {
+                    let _ = inner.writer.write_all(b"\x1b[1;1R");
+                }
+                let _ = inner.writer.flush();
+                dsr_answered = dsr_count;
+            }
             let screen = self.screen_text();
             if screen.contains(AGY_READY_MARKER) {
                 let mut inner = self.inner.lock().await;

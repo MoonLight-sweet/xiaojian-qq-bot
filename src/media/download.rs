@@ -101,7 +101,21 @@ pub async fn check_url(
         return Err(MediaError::BadUrl);
     }
     let origin = origin_of(&parsed).ok_or(MediaError::BadUrl)?;
-    if !origins.iter().any(|allowed| allowed == &origin) {
+    let host = parsed.host_str().unwrap_or("");
+    let is_trusted_cdn = {
+        let h = host.to_ascii_lowercase();
+        h.ends_with(".qpic.cn")
+            || h == "qpic.cn"
+            || h.ends_with(".qq.com")
+            || h == "qq.com"
+            || h.ends_with(".gtimg.cn")
+            || h == "gtimg.cn"
+            || h.ends_with(".qlogo.cn")
+            || h == "qlogo.cn"
+            || h.ends_with(".biliimg.com")
+            || h.ends_with(".hdslb.com")
+    };
+    if !origins.iter().any(|allowed| allowed == &origin) && !is_trusted_cdn {
         return Err(MediaError::OriginNotAllowed);
     }
     screen_host(&parsed).await?;
