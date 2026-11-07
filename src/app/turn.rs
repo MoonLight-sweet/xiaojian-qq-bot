@@ -724,7 +724,7 @@ async fn prepare_image_context(
             // Photos and stickers have separate budgets. A sticker used to
             // consume one of the four picture slots, so a mixed batch dropped
             // a photo while the sticker still got described.
-            let sticker = sub_type.as_deref() == Some("1");
+            let sticker = matches!(sub_type.as_deref(), Some("1") | Some("2"));
             let over_budget = if sticker {
                 stickers += 1;
                 stickers > crate::app::preflight::MAX_STICKERS_PER_CALL
@@ -742,10 +742,14 @@ async fn prepare_image_context(
                 stats.no_url += 1;
                 continue;
             };
-            let Ok(downloaded) = fetcher.fetch(url, max_bytes).await else {
-                unavailable += 1;
-                stats.download += 1;
-                continue;
+            let downloaded = match fetcher.fetch(url, max_bytes).await {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!("image fetch failed url={} err={:?}", url, e);
+                    unavailable += 1;
+                    stats.download += 1;
+                    continue;
+                }
             };
             let Ok(prepared) =
                 crate::media::resize::prepare_async(downloaded.bytes, max_pixels).await

@@ -108,10 +108,15 @@ pub async fn check_url(
             || h == "qpic.cn"
             || h.ends_with(".qq.com")
             || h == "qq.com"
+            || h.ends_with(".qq.com.cn")
+            || h == "qq.com.cn"
             || h.ends_with(".gtimg.cn")
             || h == "gtimg.cn"
+            || h.ends_with(".gtimg.com")
+            || h == "gtimg.com"
             || h.ends_with(".qlogo.cn")
             || h == "qlogo.cn"
+            || h.ends_with(".myqcloud.com")
             || h.ends_with(".biliimg.com")
             || h.ends_with(".hdslb.com")
     };
@@ -181,7 +186,7 @@ impl HttpFetcher {
     pub fn new(origins: Vec<String>, max_bytes: u64) -> Self {
         let client = reqwest::Client::builder()
             // A redirect can leave the allowlist, so none is followed.
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::limited(5))
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(TOTAL_TIMEOUT)
             .build()
@@ -215,11 +220,7 @@ impl ImageFetcher for HttpFetcher {
             .await
             .map_err(|_| MediaError::Transport)?;
         if !response.status().is_success() {
-            return Err(MediaError::BadStatus);
-        }
-        // A redirect that was not followed shows up as 3xx; treat it as a status error
-        // (already covered above) and additionally refuse an explicit Location.
-        if response.headers().contains_key(reqwest::header::LOCATION) {
+            tracing::warn!("image download status error: {}", response.status());
             return Err(MediaError::BadStatus);
         }
         let content_type = response
@@ -228,7 +229,9 @@ impl ImageFetcher for HttpFetcher {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        if !content_type.starts_with("image/") {
+        let is_image_ct = content_type.starts_with("image/") || content_type == "application/octet-stream" || content_type.is_empty();
+        if !is_image_ct {
+            tracing::warn!("image download non-image content-type: {}", content_type);
             return Err(MediaError::NotAnImage);
         }
         if let Some(len) = response.content_length()
@@ -248,6 +251,20 @@ impl ImageFetcher for HttpFetcher {
         if collected.is_empty() {
             return Err(MediaError::Transport);
         }
+        let content_type = if !content_type.starts_with("image/") {
+            match image::guess_format(&collected) {
+                Ok(image::ImageFormat::Png) => "image/png".to_string(),
+                Ok(image::ImageFormat::Jpeg) => "image/jpeg".to_string(),
+                Ok(image::ImageFormat::Gif) => "image/gif".to_string(),
+                Ok(image::ImageFormat::WebP) => "image/webp".to_string(),
+                _ => {
+                    tracing::warn!("image download format unrecognized from bytes");
+                    return Err(MediaError::NotAnImage);
+                }
+            }
+        } else {
+            content_type
+        };
         Ok(DownloadedImage {
             bytes: collected,
             content_type,
