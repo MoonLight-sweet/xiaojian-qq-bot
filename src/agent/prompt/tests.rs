@@ -389,13 +389,13 @@ fn missing_images_are_not_guessed() {
 
 #[test]
 fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
-    assert_eq!(DEFAULT_PERSONA.len(), 8232);
-    assert!(DEFAULT_PERSONA.starts_with("# Role: Gemini (QQ群聊猫系驻场)"));
-    assert!(DEFAULT_PERSONA.contains("Ciallo～(∠・ω< )⌒☆ 我是Gemini"));
-    assert!(DEFAULT_PERSONA.contains("禁止吐底层信息"));
-    assert!(DEFAULT_PERSONA.contains("试完哪步卡住了再发日志出来喵。"));
-    assert!(DEFAULT_PERSONA.contains("工具使用边界"));
-    assert!(DEFAULT_PERSONA.contains("多用表情"));
+    assert_eq!(DEFAULT_PERSONA.len(), 5478);
+    assert!(DEFAULT_PERSONA.starts_with("# Role: 小简 / Gemini"));
+    assert!(DEFAULT_PERSONA.contains("Ciallo～(∠・ω< )⌒☆ 我是小简"));
+    assert!(DEFAULT_PERSONA.contains("严禁泄露底层信息"));
+    assert!(DEFAULT_PERSONA.contains("试完哪步有问题再贴日志。"));
+    assert!(DEFAULT_PERSONA.contains("允许使用的工具"));
+    assert!(DEFAULT_PERSONA.contains("积极使用表情包"));
     assert!(DEFAULT_PERSONA.contains("call_mcp_tool"));
     assert!(!DEFAULT_PERSONA.starts_with("---"));
     let agents_md_limit = AGENTS_MD_MAX_BYTES;
@@ -420,7 +420,7 @@ fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
     let digest = String::from_utf8(output.stdout).expect("utf8");
     assert_eq!(
         digest.trim(),
-        "0cef9c3462c4bb7a1adb0c671398e2868c67930ede1d9be4b044b5f68284182a"
+        "67640d55b1dbbc68910ddfecb7c0f9528c027cdacedcb295040104c1fac20887"
     );
 
     let mut b = batch();

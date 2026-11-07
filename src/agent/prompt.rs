@@ -220,7 +220,7 @@ fn clock_prefix(ts: i64) -> String {
 pub const DEFAULT_PERSONA: &str = include_str!("persona_card.txt");
 
 /// Agy 1.4.7 stops reading an instruction file past this size.
-pub const AGENTS_MD_MAX_BYTES: usize = 24_000;
+pub const AGENTS_MD_MAX_BYTES: usize = 64_000;
 
 /// The persistent instruction file Agy reads on its own, once per run, from its working
 /// directory.

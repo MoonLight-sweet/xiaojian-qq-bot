@@ -281,7 +281,7 @@ async fn get_persona(State(state): State<Arc<AdminState>>) -> ApiResult {
     ok_json(json!({
         "persona": persona.unwrap_or_else(|| state.persona_default.clone()),
         "is_default": state.store.get_persona().await.ok().flatten().is_none(),
-        "max_chars": 4_000,
+        "max_chars": 10_000,
     }))
 }
 
@@ -298,7 +298,7 @@ async fn put_persona(State(state): State<Arc<AdminState>>, Json(body): Json<Valu
     if text.is_empty() {
         return Err(ApiError::bad_request("empty_persona"));
     }
-    if text.chars().count() > 4_000 {
+    if text.chars().count() > 10_000 {
         return Err(ApiError::bad_request("persona_too_long"));
     }
     if text.contains("[CQ:") {

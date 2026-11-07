@@ -90,7 +90,7 @@ impl SandboxWorkspace {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "AGENTS.md must be the plain character card under 24000 bytes",
+                "AGENTS.md must be the plain character card under 64000 bytes",
             ));
         }
         fs::create_dir_all(dir)?;
