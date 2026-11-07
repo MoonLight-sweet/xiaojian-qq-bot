@@ -1,4 +1,4 @@
-# Gemini QQ Bot - 小简 (Xiao Jian)
+# xiaojian-qq-bot - 小简 (Xiao Jian)
 
 基于 Google Antigravity (Gemini) 与 OneBot 11 构建的高情商、去AI味、具备人设自主演化与长期记忆能力的 QQ 群聊智能体驻场机器人。
 
@@ -103,8 +103,8 @@ docker run -d \
 克隆本项目到本地或服务器：
 
 ```bash
-git clone https://github.com/MoonLight-sweet/gemini-qq-bot.git
-cd gemini-qq-bot
+git clone https://github.com/MoonLight-sweet/xiaojian-qq-bot.git
+cd xiaojian-qq-bot
 
 # 复制并修改配置文件
 cp config.example.toml config.toml
