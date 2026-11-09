@@ -34,7 +34,7 @@ quiet_window_seconds = 8
 max_batch_age_seconds = 45
 max_batch_messages = 30
 max_batch_chars = 6000
-max_batch_images = 6
+max_batch_images = 8
 
 # 回复引擎：并发轮次与单轮超时（秒）。
 agent_concurrency = 4

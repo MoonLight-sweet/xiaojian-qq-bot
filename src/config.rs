@@ -162,7 +162,7 @@ impl Default for FileConfig {
             max_batch_age_seconds: 30,
             max_batch_messages: 50,
             max_batch_chars: 8_000,
-            max_batch_images: 4,
+            max_batch_images: 8,
             agent_concurrency: 2,
             agent_timeout_seconds: 180,
             mihomo_api_port: 9090,
@@ -717,7 +717,7 @@ mod tests {
         assert_eq!(file.max_batch_age_seconds, 30);
         assert_eq!(file.max_batch_messages, 50);
         assert_eq!(file.max_batch_chars, 8_000);
-        assert_eq!(file.max_batch_images, 4);
+        assert_eq!(file.max_batch_images, 8);
         assert_eq!(file.memory_context_budget, 4_000);
         assert_eq!(file.compaction_daily_limit, 10);
         assert_eq!(file.hourly_call_budget, 60);

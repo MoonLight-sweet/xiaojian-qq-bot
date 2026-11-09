@@ -24,7 +24,7 @@ use crate::config::host_is_forbidden;
 /// Connection timeout for the media fetch.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Total timeout for the media fetch.
-pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(15);
+pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// Why a download was refused or failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -13,7 +13,7 @@ use super::resize::PreparedImage;
 
 /// How many images one batch may carry. Anything beyond this is reported as unavailable
 /// rather than silently dropped.
-pub const MAX_BATCH_IMAGES: usize = 4;
+pub const MAX_BATCH_IMAGES: usize = 8;
 
 /// Maximum dimension for a single staged image after resizing. Guards against absurd
 /// source dimensions; normal photos land far below it.
@@ -229,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_batch_stops_at_the_batch_cap() {
-        let raw: Vec<(String, Vec<u8>)> = (0..6)
+        let raw: Vec<(String, Vec<u8>)> = (0..10)
             .map(|i| (format!("i{i}"), prepared(20, 20).bytes))
             .collect();
         let out = prepare_batch(Transport::SandboxFile, &raw, 20_000_000).await;
