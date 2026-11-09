@@ -389,7 +389,7 @@ fn missing_images_are_not_guessed() {
 
 #[test]
 fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
-    assert_eq!(DEFAULT_PERSONA.len(), 5478);
+    assert_eq!(DEFAULT_PERSONA.len(), 6616);
     assert!(DEFAULT_PERSONA.starts_with("# Role: 小简 / Gemini"));
     assert!(DEFAULT_PERSONA.contains("Ciallo～(∠・ω< )⌒☆ 我是小简"));
     assert!(DEFAULT_PERSONA.contains("严禁泄露底层信息"));
@@ -400,7 +400,7 @@ fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
     assert!(!DEFAULT_PERSONA.starts_with("---"));
     let agents_md_limit = AGENTS_MD_MAX_BYTES;
     assert!(DEFAULT_PERSONA.len() <= agents_md_limit);
-    let mut child = std::process::Command::new("python3")
+    let mut child = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
         .args([
             "-c",
             "import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())",
@@ -420,7 +420,7 @@ fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
     let digest = String::from_utf8(output.stdout).expect("utf8");
     assert_eq!(
         digest.trim(),
-        "67640d55b1dbbc68910ddfecb7c0f9528c027cdacedcb295040104c1fac20887"
+        "a6d156cb7cd02d8fcdf26564d7b7c91487e3c68b3d8c5139b08ae645dceab718"
     );
 
     let mut b = batch();
