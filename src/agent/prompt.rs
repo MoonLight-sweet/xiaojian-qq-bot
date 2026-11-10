@@ -162,6 +162,8 @@ pub struct PromptBatch {
     /// The clock line at the top of the prompt, produced when the batch was
     /// assembled ([`now_line`]). `None` renders nothing.
     pub now_line: Option<String>,
+    /// 本地梗百科命中参考（来自 memes 知识库，dsh-memewiki 架构）。命中时单条注入，未命中为 None。
+    pub meme_wiki_context: Option<String>,
 }
 
 /// Timezone the clock is rendered in: Asia/Shanghai is UTC+8 all year, so a fixed
@@ -335,6 +337,12 @@ pub fn render(batch: &PromptBatch) -> String {
             "本列表之外的更早细节，用 call_mcp_tool 调用 memory_search 查；不确定就直说不知道，不要编。\n",
         );
         out.push('\n');
+    }
+
+    if let Some(meme_info) = &batch.meme_wiki_context {
+        out.push_str("# 梗百科与网络流行语参考（本地离线知识库）\n");
+        out.push_str(meme_info.trim());
+        out.push_str("\n\n");
     }
 
     if batch.flooded {

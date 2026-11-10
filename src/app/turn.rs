@@ -671,6 +671,7 @@ pub fn build_prompt_batch(
         flood_background: None,
         turn_token: None,
         now_line: None,
+        meme_wiki_context: None,
     };
     (batch, scope)
 }

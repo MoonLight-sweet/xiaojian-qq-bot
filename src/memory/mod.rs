@@ -7,6 +7,7 @@ pub mod consolidate;
 pub mod digest;
 pub mod extract;
 pub mod handover;
+pub mod memewiki;
 pub mod retrieval;
 pub mod stickers;
 

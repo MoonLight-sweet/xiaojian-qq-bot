@@ -326,6 +326,7 @@ impl Session {
             extras::BILIBILI_TOOL => extras::call_bilibili(store, &scope, &args).await,
             extras::PROFILE_TOOL => extras::call_profile_update(store, &scope, &args).await,
             extras::QZONE_TOOL => extras::call_qzone_publish(store, &scope, &args).await,
+            extras::MEMEWIKI_TOOL => extras::call_search_meme_wiki(store, &scope, &args).await,
             submit::TOOL_NAME => submit::call_submit(store, &scope, &args).await,
             _ => return memory::handle(store, &scope, frame).await,
         };

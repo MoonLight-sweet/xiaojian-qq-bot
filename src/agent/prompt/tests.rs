@@ -38,6 +38,7 @@ fn batch() -> PromptBatch {
         flood_background: None,
         turn_token: None,
         now_line: None,
+        meme_wiki_context: None,
     }
 }
 
@@ -389,7 +390,7 @@ fn missing_images_are_not_guessed() {
 
 #[test]
 fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
-    assert_eq!(DEFAULT_PERSONA.len(), 7363);
+    assert_eq!(DEFAULT_PERSONA.len(), 7504);
     assert!(DEFAULT_PERSONA.starts_with("# Role: 小简 / Gemini"));
     assert!(DEFAULT_PERSONA.contains("Ciallo～(∠・ω< )⌒☆ 我是小简"));
     assert!(DEFAULT_PERSONA.contains("严禁泄露底层信息"));
@@ -420,7 +421,7 @@ fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
     let digest = String::from_utf8(output.stdout).expect("utf8");
     assert_eq!(
         digest.trim(),
-        "ad7f09a1af51d530cfe1114509fd635f1a2438786353f5b73c9acdf3cba62e5e"
+        "2dcd14f5b77d99c0822641e3b2cfac58c668cc174225bbeae86a08f4a060c28a"
     );
 
     let mut b = batch();

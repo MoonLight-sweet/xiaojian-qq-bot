@@ -14,6 +14,7 @@ use crate::store::SqliteStore;
 pub const BILIBILI_TOOL: &str = "bilibili_browse";
 pub const PROFILE_TOOL: &str = "profile_update";
 pub const QZONE_TOOL: &str = "qzone_publish";
+pub const MEMEWIKI_TOOL: &str = "search_meme_wiki";
 
 /// Cooldown for autonomous global profile/avatar change: once per 24 hours.
 const SELF_PROFILE_COOLDOWN_SECS: i64 = 86_400;
@@ -101,6 +102,20 @@ pub fn tool_definitions() -> Value {
                     }
                 },
                 "required": ["content"]
+            }
+        },
+        {
+            "name": MEMEWIKI_TOOL,
+            "description": "检索本地离线梗百科词典（包含 6700+ 中文网络流行语、流行梗、黑话出处、缩写与用法）。当你没把握某个词的梗义、或群友询问某个梗的背景与接法时调用。查到后自然融入对话，不要教科书式念经。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "要查询的网络梗名称、缩写或关键词（如'去码头整点薯条'、'kskbl'、'二仙桥'）"
+                    }
+                },
+                "required": ["query"]
             }
         }
     ])
@@ -1161,5 +1176,44 @@ pub async fn call_qzone_publish(store: &SqliteStore, scope: &Scope, args: &Value
                 .await;
             tool_err(format!("发表QQ空间说说失败: {e}"))
         }
+    }
+}
+
+pub async fn call_search_meme_wiki(
+    store: &SqliteStore,
+    _scope: &Scope,
+    args: &Value,
+) -> Value {
+    let query = match args.get("query").and_then(Value::as_str) {
+        Some(q) if !q.trim().is_empty() => q.trim(),
+        _ => return tool_err("缺少 query 参数或 query 为空"),
+    };
+
+    match crate::memory::memewiki::search_meme(&store.pool, query).await {
+        Some(record) => {
+            let mut text = format!("【查询命中】：{}\n", record.title);
+            if let Some(aliases) = &record.aliases {
+                if !aliases.trim().is_empty() {
+                    text.push_str(&format!("别名/缩写：{}\n", aliases.trim()));
+                }
+            }
+            if let Some(summary) = &record.summary {
+                if !summary.trim().is_empty() {
+                    text.push_str(&format!("释义：{}\n", summary.trim()));
+                }
+            }
+            if let Some(origin) = &record.origin {
+                if !origin.trim().is_empty() {
+                    text.push_str(&format!("梗出处：{}\n", origin.trim()));
+                }
+            }
+            if let Some(usage) = &record.usage {
+                if !usage.trim().is_empty() {
+                    text.push_str(&format!("用法/接法：{}\n", usage.trim()));
+                }
+            }
+            tool_ok(text)
+        }
+        None => tool_ok(format!("梗百科知识库中暂未收录「{query}」相关词条。可以如实回答不知道，或结合上下文自然接话，切勿胡编乱造。")),
     }
 }

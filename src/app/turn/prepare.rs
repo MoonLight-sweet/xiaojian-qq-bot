@@ -572,6 +572,29 @@ impl TurnExecutor {
         prompt_batch.digest = digest_text;
         prompt_batch.flooded = job.flooded;
         prompt_batch.flood_background = job.flood_background.clone();
+
+        // 梗百科前置自动预查（dsh-memewiki 架构）：检测本批消息中是否存在问梗或黑话，命中则注入
+        let mut meme_match: Option<String> = None;
+        for msg in messages.iter().rev() {
+            if let Some(query) = crate::memory::memewiki::extract_query(&msg.text) {
+                if let Some(meme) = crate::memory::memewiki::search_meme(&self.store.pool, &query).await {
+                    let _ = self
+                        .store
+                        .audit(
+                            "system",
+                            &format!("memewiki.hit.g{}.{}", job.group_id, meme.title),
+                            Some(&self.bot_id),
+                            Some(&job.group_id),
+                            crate::now_unix(),
+                        )
+                        .await;
+                    meme_match = Some(meme.render_context());
+                    break;
+                }
+            }
+        }
+        prompt_batch.meme_wiki_context = meme_match;
+
         // An update still needs its key to survive validation, so every key the digest
         // exposed is accepted even if the digest's own pass picked it up through an
         // expansion term the batch text alone would not have surfaced.
