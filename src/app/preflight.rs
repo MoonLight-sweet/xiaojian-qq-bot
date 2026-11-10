@@ -49,7 +49,7 @@ pub const VISION_IN_FLIGHT: usize = 4;
 /// Per-picture budget. A single spread call landed in 3.0–3.6s; past this the
 /// picture is undescribed and the turn proceeds. The shared client timeout is
 /// 120s, which is wrong for something sitting on the reply path.
-pub const VISION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+pub const VISION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
 /// Which published vision model serves picture `index` (0-based).
 fn vision_model(index: usize) -> &'static str {
@@ -496,11 +496,10 @@ for its tone; photo if it is a real-world photograph; screenshot if it is a capt
 screen; art if it is drawn or rendered artwork.\n\
 ocr: the text visible in the picture, as close to what it says as you can read. Empty \
 string if there is no text. Do not translate it.\n\
-description: one short Simplified Chinese caption of at most 30 characters naming \
-what the picture shows so it can be found again later: the character or subject and \
-its defining look, the expression or action, and the art style if distinctive. One \
-compact phrase, not full sentences, no scene narration, no usage speculation, and do \
-not repeat the `ocr` text.\n\
+description: a rich Simplified Chinese description of up to 150 characters. For stickers (kind=sticker), \
+name the character, action, expression, and crucially explain the underlying meme, humor or chat irony. \
+For photos/screenshots (kind=photo/screenshot), detail the real-world scene, main subjects, their status, \
+screen contents (code/error/questions), providing complete visual context for conversation.\n\
 emotion: the feeling it conveys, one or two Simplified Chinese words.\n\
 self: compare the character against the described appearance above. self if it is her: \
 matching hair, cat ears, and one gold plus one pink-violet eye are enough to decide, even \
