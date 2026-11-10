@@ -94,12 +94,77 @@ fn clean_parts(parts: &[String]) -> Vec<String> {
     for part in parts {
         for line in part.split(['\n', '\r']) {
             let cleaned = strip_controls(line).trim().to_string();
-            if !cleaned.is_empty() {
-                out.push(cleaned);
+            let stripped = strip_trailing_kaomoji(&cleaned);
+            if !stripped.is_empty() {
+                out.push(stripped);
             }
         }
     }
     out
+}
+
+/// 剥离句尾格式化的括号颜文字（如 `(¬‿¬)`、`(=｀ω´=)`、`( ´_ゝ｀)`、`(*^▽^*)` 等）。
+/// 保持打招呼 `Ciallo～(∠・ω< )⌒☆ 我是小简` 等固定短语完整。
+pub fn strip_trailing_kaomoji(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.starts_with("Ciallo") {
+        return trimmed.to_string();
+    }
+
+    // 检查末尾是否闭合括号
+    let last_char = match trimmed.chars().last() {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    if last_char != ')' && last_char != '）' {
+        return trimmed.to_string();
+    }
+
+    let is_open_bracket = |c: char| c == '(' || c == '（';
+    // 寻找与末尾括号匹配的最近开括号
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut open_idx = None;
+    for i in (0..chars.len() - 1).rev() {
+        if is_open_bracket(chars[i]) {
+            open_idx = Some(i);
+            break;
+        }
+    }
+
+    let Some(start) = open_idx else {
+        return trimmed.to_string();
+    };
+
+    // 括号内的内容切片
+    let inside: String = chars[start + 1..chars.len() - 1].iter().collect();
+    let inside = inside.trim();
+
+    // 如果括号内为空，或者超过20个字符，或者包含中文汉字，则不视作短颜文字
+    if inside.is_empty() || inside.chars().count() > 20 {
+        return trimmed.to_string();
+    }
+
+    // 颜文字特征：包含典型的颜文字符号或口癖符号，且不包含常用汉字
+    let has_cjk = inside.chars().any(|c| ('\u{4e00}'..='\u{9fa5}').contains(&c));
+    if has_cjk {
+        return trimmed.to_string();
+    }
+
+    // 检查是否包含颜文字常见构造成分（如 ¬, ‿, ω, ゝ, ╯, ︶, ▽, ◕, ﾟ, ｡, ¯, ˘, ⊙, ∀, ᐛ, ᐕ, 皿, 益 等，或纯符号混合）
+    let is_symbolic = inside.chars().all(|c| !c.is_alphanumeric() || matches!(c, 'v' | 'V' | 'o' | 'O' | 'x' | 'X' | 'w' | 'W' | 'u' | 'U' | 'T' | 'Q' | 'p' | 'P'));
+    let has_kaomoji_chars = inside.chars().any(|c| matches!(c, '¬' | '‿' | 'ω' | 'ゝ' | '╯' | '︶' | '▽' | '◕' | 'ﾟ' | '｡' | '¯' | '˘' | '⊙' | '∀' | 'ᐛ' | 'ᐕ' | 'Д' | 'Д' | 'д' | 'ㅂ' | '꒳' | 'ᴗ' | 'ᆺ' | 'ㅅ' | '・' | '´' | '`' | '*' | '^' | '-' | '=' | '_' | '/' | '\\' | '<' | '>'));
+
+    if is_symbolic || has_kaomoji_chars {
+        let prefix: String = chars[..start].iter().collect();
+        let prefix = prefix.trim_end();
+        if prefix.is_empty() {
+            // 如果整句就只有一个颜文字，保留或者清空？如果全句只有颜文字则返回空
+            return String::new();
+        }
+        return prefix.to_string();
+    }
+
+    trimmed.to_string()
 }
 
 fn split_fallback(text: &str) -> Vec<String> {
@@ -491,5 +556,29 @@ mod tests {
         assert!(!masked.contains("aaaaaaaa"));
         assert!(!masked.contains("bbbbbbbb"));
         assert_eq!(masked.matches(FILTERED).count(), 2);
+    }
+
+    #[test]
+    fn test_strip_trailing_kaomoji() {
+        assert_eq!(
+            strip_trailing_kaomoji("睡觉快去上课吧，迟到了可别被班主任逮到罚站 (¬‿¬)"),
+            "睡觉快去上课吧，迟到了可别被班主任逮到罚站"
+        );
+        assert_eq!(
+            strip_trailing_kaomoji("杂鱼群友睡醒了没 (=｀ω´=)"),
+            "杂鱼群友睡醒了没"
+        );
+        assert_eq!(
+            strip_trailing_kaomoji("真拿你没办法 ( ´_ゝ｀)"),
+            "真拿你没办法"
+        );
+        assert_eq!(
+            strip_trailing_kaomoji("Ciallo～(∠・ω< )⌒☆ 我是小简"),
+            "Ciallo～(∠・ω< )⌒☆ 我是小简"
+        );
+        assert_eq!(
+            strip_trailing_kaomoji("普通括号（含解释说明文字）"),
+            "普通括号（含解释说明文字）"
+        );
     }
 }
