@@ -324,7 +324,7 @@ impl TurnExecutor {
                             )
                             .await
                         {
-                            SubmissionOutcome::Wait => {}
+                            SubmissionOutcome::Wait => continue,
                             SubmissionOutcome::Nudge => {
                                 match session
                                     .deliver(first_turn_nudge_prompt(self.output_channel))
@@ -369,65 +369,112 @@ impl TurnExecutor {
                                     .await;
                             }
                         }
-                    }
-                    // One classification per round, reused by the addressed-silence
-                    // guard below and by the probe at the end of the arm: the same
-                    // text decides both questions, and asking twice risked the two
-                    // answers drifting apart.
-                    let shape = RoundShape::of(&text, &prepared.scope);
-                    // A deep session that answers with nothing but
-                    // `should_reply: false` is not a reply. Recording it as
-                    // success deletes the batch. Retire the session and answer
-                    // this batch once, on a conversation that has no transcript.
-                    // A content-filter refusal delivered as the turn's text
-                    // (2026-10-28, group 943: the refusal prose reached the
-                    // salvage ladder and was booked as a malformed contract):
-                    // the prompt never ran, so close it as what it is —
-                    // before the refusal-shape checks below can mistake it
-                    // for a contract the session chose to write.
-                    if !self.output_channel.is_mcp()
-                        && !text.trim_start().starts_with('{')
-                        && looks_like_prompt_rejection(&text)
-                    {
-                        let _ = self
-                            .store
-                            .record_resident_counts(&call_id, steps, i64::from(inserts), drafts)
-                            .await;
-                        return self
-                            .retire_for_content_filter(manager, job, &call_id, &coverage)
-                            .await;
-                    }
-                    if steps >= RESIDENT_STEP_ROTATE_LIMIT && contract::is_bare_refusal(&text) {
-                        let _ = self
-                            .store
-                            .record_resident_counts(&call_id, steps, i64::from(inserts), drafts)
-                            .await;
-                        manager
-                            .audit(
-                                &job.group_id,
-                                &format!("resident.turn.bare_refusal.g{}.step{idx}", job.group_id),
-                            )
-                            .await;
-                        return self
-                            .retire_resident(
+                    } else {
+                        // One classification per round, reused by the addressed-silence
+                        // guard below and by the probe at the end of the arm: the same
+                        // text decides both questions, and asking twice risked the two
+                        // answers drifting apart.
+                        let shape = RoundShape::of(&text, &prepared.scope);
+                        // A deep session that answers with nothing but
+                        // `should_reply: false` is not a reply. Recording it as
+                        // success deletes the batch. Retire the session and answer
+                        // this batch once, on a conversation that has no transcript.
+                        // A content-filter refusal delivered as the turn's text
+                        // (2026-10-28, group 943: the refusal prose reached the
+                        // salvage ladder and was booked as a malformed contract):
+                        // the prompt never ran, so close it as what it is —
+                        // before the refusal-shape checks below can mistake it
+                        // for a contract the session chose to write.
+                        if !text.trim_start().starts_with('{')
+                            && looks_like_prompt_rejection(&text)
+                        {
+                            let _ = self
+                                .store
+                                .record_resident_counts(&call_id, steps, i64::from(inserts), drafts)
+                                .await;
+                            return self
+                                .retire_for_content_filter(manager, job, &call_id, &coverage)
+                                .await;
+                        }
+                        if steps >= RESIDENT_STEP_ROTATE_LIMIT && contract::is_bare_refusal(&text) {
+                            let _ = self
+                                .store
+                                .record_resident_counts(&call_id, steps, i64::from(inserts), drafts)
+                                .await;
+                            manager
+                                .audit(
+                                    &job.group_id,
+                                    &format!("resident.turn.bare_refusal.g{}.step{idx}", job.group_id),
+                                )
+                                .await;
+                            return self
+                                .retire_resident(
+                                    manager,
+                                    job,
+                                    &call_id,
+                                    "bare_refusal",
+                                    ErrorClass::AgentFailed.as_str(),
+                                    &coverage,
+                                )
+                                .await;
+                        }
+                        // An addressed round may not end on a silence. The batch that
+                        // claimed this turn — or one absorbed into it — was aimed at the
+                        // bot, so `should_reply: false` here is a dropped question, not a
+                        // judgement that the group should be left alone (2026-10-28,
+                        // group 943: the owner asked a question, the mention claimed its
+                        // own batch, and the turn ended as a salvaged decline). Retire
+                        // the session and answer the batch once on a conversation that
+                        // has no transcript — the same recovery the bare refusal uses.
+                        if shape.addressed_silence(coverage.any_privileged()) {
+                            let _ = self
+                                .store
+                                .record_resident_counts(&call_id, steps, i64::from(inserts), drafts)
+                                .await;
+                            manager
+                                .audit(
+                                    &job.group_id,
+                                    &format!(
+                                        "resident.turn.addressed_silence.g{}.step{idx}",
+                                        job.group_id
+                                    ),
+                                )
+                                .await;
+                            // The round is recorded as degraded before the session is
+                            // retired: it answered nothing it was asked, which is the
+                            // quality signal the window exists to catch. It is recorded
+                            // here because the retry's own round is not measured, so
+                            // nothing else would feed the window.
+                            self.apply_probe(
                                 manager,
-                                job,
-                                &call_id,
-                                "bare_refusal",
-                                ErrorClass::AgentFailed.as_str(),
-                                &coverage,
+                                &job.group_id,
+                                RoundOutcome {
+                                    contract_ok: true,
+                                    steps,
+                                    drafts,
+                                    degraded: true,
+                                },
+                                false,
                             )
                             .await;
-                    }
-                    // An addressed round may not end on a silence. The batch that
-                    // claimed this turn — or one absorbed into it — was aimed at the
-                    // bot, so `should_reply: false` here is a dropped question, not a
-                    // judgement that the group should be left alone (2026-10-28,
-                    // group 943: the owner asked a question, the mention claimed its
-                    // own batch, and the turn ended as a salvaged decline). Retire
-                    // the session and answer the batch once on a conversation that
-                    // has no transcript — the same recovery the bare refusal uses.
-                    if shape.addressed_silence(coverage.any_privileged()) {
+                            return self
+                                .retire_resident(
+                                    manager,
+                                    job,
+                                    &call_id,
+                                    "addressed_silence",
+                                    ErrorClass::AgentFailed.as_str(),
+                                    &coverage,
+                                )
+                                .await;
+                        }
+                        // A logical round completed: this is what the conversation cap
+                        // counts, not the number of PTY round-trips.
+                        let count = self
+                            .store
+                            .bump_agy_turn_count(&self.bot_id, &job.group_id, crate::now_unix())
+                            .await
+                            .unwrap_or(0);
                         let _ = self
                             .store
                             .record_resident_counts(&call_id, steps, i64::from(inserts), drafts)
@@ -436,111 +483,64 @@ impl TurnExecutor {
                             .audit(
                                 &job.group_id,
                                 &format!(
-                                    "resident.turn.addressed_silence.g{}.step{idx}",
+                                    "resident.turn.delivered.g{}.step{idx}.ins{inserts}.drafts{drafts}",
                                     job.group_id
                                 ),
                             )
                             .await;
-                        // The round is recorded as degraded before the session is
-                        // retired: it answered nothing it was asked, which is the
-                        // quality signal the window exists to catch. It is recorded
-                        // here because the retry's own round is not measured, so
-                        // nothing else would feed the window.
+
+                        let result = self
+                            .finish_turn_with_coverage(
+                                job,
+                                &call_id,
+                                &text,
+                                TurnTiming {
+                                    turn_started,
+                                    agent_started,
+                                },
+                                prepared,
+                                coverage,
+                            )
+                            .await
+                            .unwrap_or_else(|early| early);
+                        // A send or a chosen silence is a real resident round: it is the
+                        // only thing that walks the respawn ladder back down. Nothing
+                        // else reaches this point, so nothing can excuse a failing
+                        // session.
+                        if matches!(result, TurnResult::Replied | TurnResult::Silent) {
+                            manager.note_respawn_clean(&job.group_id).await;
+                            // A delivered round is also a clean round for the
+                            // seed quarantine: ten in a row earn the full seed
+                            // back (see SqliteStore::note_seed_clean_round).
+                            let _ = self
+                                .store
+                                .note_seed_clean_round(&self.bot_id, &job.group_id, crate::now_unix())
+                                .await;
+                        }
+
+                        // Probe: a delivered round is the only kind that feeds the
+                        // rolling window; failures are counted by the caller of
+                        // `finish_turn_with_coverage` via the BadOutput branch below.
+                        let contract_ok = !matches!(result, TurnResult::BadOutput);
                         self.apply_probe(
                             manager,
                             &job.group_id,
                             RoundOutcome {
-                                contract_ok: true,
+                                contract_ok,
                                 steps,
                                 drafts,
-                                degraded: true,
+                                degraded: shape.degraded(),
                             },
                             false,
                         )
                         .await;
-                        return self
-                            .retire_resident(
-                                manager,
-                                job,
-                                &call_id,
-                                "addressed_silence",
-                                ErrorClass::AgentFailed.as_str(),
-                                &coverage,
-                            )
+
+                        // Rotation after a completed logical round: the next turn
+                        // starts a fresh conversation and `prepare_turn` seeds it.
+                        self.rotate_after_delivered_round(&job.group_id, count, steps)
                             .await;
+                        return result;
                     }
-                    // A logical round completed: this is what the conversation cap
-                    // counts, not the number of PTY round-trips.
-                    let count = self
-                        .store
-                        .bump_agy_turn_count(&self.bot_id, &job.group_id, crate::now_unix())
-                        .await
-                        .unwrap_or(0);
-                    let _ = self
-                        .store
-                        .record_resident_counts(&call_id, steps, i64::from(inserts), drafts)
-                        .await;
-                    manager
-                        .audit(
-                            &job.group_id,
-                            &format!(
-                                "resident.turn.delivered.g{}.step{idx}.ins{inserts}.drafts{drafts}",
-                                job.group_id
-                            ),
-                        )
-                        .await;
-
-                    let result = self
-                        .finish_turn_with_coverage(
-                            job,
-                            &call_id,
-                            &text,
-                            TurnTiming {
-                                turn_started,
-                                agent_started,
-                            },
-                            prepared,
-                            coverage,
-                        )
-                        .await
-                        .unwrap_or_else(|early| early);
-                    // A send or a chosen silence is a real resident round: it is the
-                    // only thing that walks the respawn ladder back down. Nothing
-                    // else reaches this point, so nothing can excuse a failing
-                    // session.
-                    if matches!(result, TurnResult::Replied | TurnResult::Silent) {
-                        manager.note_respawn_clean(&job.group_id).await;
-                        // A delivered round is also a clean round for the
-                        // seed quarantine: ten in a row earn the full seed
-                        // back (see SqliteStore::note_seed_clean_round).
-                        let _ = self
-                            .store
-                            .note_seed_clean_round(&self.bot_id, &job.group_id, crate::now_unix())
-                            .await;
-                    }
-
-                    // Probe: a delivered round is the only kind that feeds the
-                    // rolling window; failures are counted by the caller of
-                    // `finish_turn_with_coverage` via the BadOutput branch below.
-                    let contract_ok = !matches!(result, TurnResult::BadOutput);
-                    self.apply_probe(
-                        manager,
-                        &job.group_id,
-                        RoundOutcome {
-                            contract_ok,
-                            steps,
-                            drafts,
-                            degraded: shape.degraded(),
-                        },
-                        false,
-                    )
-                    .await;
-
-                    // Rotation after a completed logical round: the next turn
-                    // starts a fresh conversation and `prepare_turn` seeds it.
-                    self.rotate_after_delivered_round(&job.group_id, count, steps)
-                        .await;
-                    return result;
                 }
                 // Same rule for a contract the barrier already failed: the
                 // bytes are often a half-written step. Wait for the prompt,
