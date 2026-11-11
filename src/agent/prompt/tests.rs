@@ -390,11 +390,11 @@ fn missing_images_are_not_guessed() {
 
 #[test]
 fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
-    assert_eq!(DEFAULT_PERSONA.len(), 7504);
+    assert_eq!(DEFAULT_PERSONA.len(), 7842);
     assert!(DEFAULT_PERSONA.starts_with("# Role: 小简 / Gemini"));
     assert!(DEFAULT_PERSONA.contains("Ciallo～(∠・ω< )⌒☆ 我是小简"));
     assert!(DEFAULT_PERSONA.contains("严禁泄露底层信息"));
-    assert!(DEFAULT_PERSONA.contains("试完哪步有问题再贴日志。"));
+    assert!(DEFAULT_PERSONA.contains("排查过程中遇到哪一步报错随时贴出来，我们一起看。"));
     assert!(DEFAULT_PERSONA.contains("允许使用的工具"));
     assert!(DEFAULT_PERSONA.contains("积极使用表情包"));
     assert!(DEFAULT_PERSONA.contains("call_mcp_tool"));
@@ -421,7 +421,7 @@ fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
     let digest = String::from_utf8(output.stdout).expect("utf8");
     assert_eq!(
         digest.trim(),
-        "2dcd14f5b77d99c0822641e3b2cfac58c668cc174225bbeae86a08f4a060c28a"
+        "923de886a0b049b784dd7c253008300986419b452bc9019556f6bd71ed59d235"
     );
 
     let mut b = batch();
