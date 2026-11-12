@@ -390,7 +390,7 @@ fn missing_images_are_not_guessed() {
 
 #[test]
 fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
-    assert_eq!(DEFAULT_PERSONA.len(), 7842);
+    assert_eq!(DEFAULT_PERSONA.len(), 8336);
     assert!(DEFAULT_PERSONA.starts_with("# Role: 小简 / Gemini"));
     assert!(DEFAULT_PERSONA.contains("Ciallo～(∠・ω< )⌒☆ 我是小简"));
     assert!(DEFAULT_PERSONA.contains("严禁泄露底层信息"));
@@ -421,7 +421,7 @@ fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
     let digest = String::from_utf8(output.stdout).expect("utf8");
     assert_eq!(
         digest.trim(),
-        "923de886a0b049b784dd7c253008300986419b452bc9019556f6bd71ed59d235"
+        "831e80f2da1dfe6bdcc53742935621980f646f3299ed974ee3b2505af6d99039"
     );
 
     let mut b = batch();
