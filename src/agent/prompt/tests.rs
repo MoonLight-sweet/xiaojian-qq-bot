@@ -390,13 +390,13 @@ fn missing_images_are_not_guessed() {
 
 #[test]
 fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
-    assert_eq!(DEFAULT_PERSONA.len(), 9089);
+    assert_eq!(DEFAULT_PERSONA.len(), 7321);
     assert!(DEFAULT_PERSONA.starts_with("# Role: 小简 / Gemini"));
     assert!(DEFAULT_PERSONA.contains("Ciallo～(∠・ω< )⌒☆ 我是小简"));
     assert!(DEFAULT_PERSONA.contains("严禁泄露底层信息"));
     assert!(DEFAULT_PERSONA.contains("排查过程中遇到哪一步报错随时贴出来，我们一起看。"));
     assert!(DEFAULT_PERSONA.contains("允许使用的工具"));
-    assert!(DEFAULT_PERSONA.contains("积极使用表情包"));
+    assert!(DEFAULT_PERSONA.contains("表情包按需发"));
     assert!(DEFAULT_PERSONA.contains("call_mcp_tool"));
     assert!(!DEFAULT_PERSONA.starts_with("---"));
     let agents_md_limit = AGENTS_MD_MAX_BYTES;
@@ -421,7 +421,7 @@ fn persona_card_is_exact_and_stored_card_reaches_agents_md_only() {
     let digest = String::from_utf8(output.stdout).expect("utf8");
     assert_eq!(
         digest.trim(),
-        "26ddb0d3ac08e7f0609928c2bc378bea38bcabd30bf6a47a5db819c1ceef2af2"
+        "d7aafd01b2ff406f5718e67b7097ba6a7486007328d23e507cde1d23e4d29899"
     );
 
     let mut b = batch();
