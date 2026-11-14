@@ -98,6 +98,11 @@ struct ResidentDriver {
     config: AgyAuxConfig,
     session: Option<ResidentSession>,
     turns: i64,
+    /// True while a delivered prompt has not yet settled cleanly. If an outer
+    /// caller (`tokio::time::timeout` in preflight) cancels `ask` mid-turn,
+    /// this flag stays `true` so the next call interrupts and drops the
+    /// half-finished session instead of pasting on top of a running turn.
+    in_flight: bool,
 }
 
 impl std::fmt::Debug for ResidentDriver {
@@ -105,6 +110,7 @@ impl std::fmt::Debug for ResidentDriver {
         f.debug_struct("ResidentDriver")
             .field("turns", &self.turns)
             .field("session_live", &self.session.is_some())
+            .field("in_flight", &self.in_flight)
             .finish_non_exhaustive()
     }
 }
@@ -115,10 +121,17 @@ impl ResidentDriver {
             config,
             session: None,
             turns: 0,
+            in_flight: false,
         }
     }
 
     async fn ensure_session(&mut self) -> Result<(), ErrorClass> {
+        if self.in_flight {
+            if let Some(session) = &self.session {
+                let _ = session.interrupt_generation(Duration::from_secs(3)).await;
+            }
+            self.drop_session().await;
+        }
         if self.session.is_some() {
             return Ok(());
         }
@@ -159,6 +172,7 @@ impl ResidentDriver {
             session.close().await;
         }
         self.turns = 0;
+        self.in_flight = false;
     }
 }
 
@@ -167,6 +181,7 @@ impl AuxDriver for ResidentDriver {
     async fn ask(&mut self, prompt: &str, timeout: Duration) -> Result<String, ErrorClass> {
         self.ensure_session().await?;
         let session = self.session.as_ref().expect("session ensured");
+        self.in_flight = true;
         let receipt = match session.deliver(prompt).await {
             Ok(receipt) => receipt,
             Err(_) => {
@@ -201,6 +216,7 @@ impl AuxDriver for ResidentDriver {
                 }
             }
             if settle.observe(parsed.events.len(), answer.as_deref()) {
+                self.in_flight = false;
                 self.turns += 1;
                 let answer = answer.expect("settled answer");
                 if self.turns >= self.config.turn_limit.max(1) {

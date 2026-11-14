@@ -58,6 +58,67 @@ pub fn settings_path(home: &Path) -> PathBuf {
     home.join(AGY_SETTINGS_RELATIVE_PATH)
 }
 
+/// Ensure `$HOME/.gemini/config/mcp_config.json` and
+/// `$HOME/.gemini/antigravity-cli/mcp_config.json` are valid and point at an
+/// existing binary on this host. Repairs broken cross-OS symlinks (e.g. a
+/// Windows `\\?\C:\...` link copied to Linux) or 0-byte files automatically.
+pub fn ensure_mcp_config(home: &Path, db_path: &Path) {
+    let cli_dir = home.join(".gemini/antigravity-cli");
+    if !cli_dir.is_dir() {
+        return;
+    }
+    let cfg_dir = home.join(".gemini/config");
+    let _ = std::fs::create_dir_all(&cfg_dir);
+    let cli_mcp = cli_dir.join("mcp_config.json");
+    let cfg_mcp = cfg_dir.join("mcp_config.json");
+
+    let is_valid = |p: &Path| -> bool {
+        let Ok(text) = std::fs::read_to_string(p) else {
+            return false;
+        };
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return false;
+        };
+        let Some(cmd) = val
+            .get("mcpServers")
+            .and_then(|s| s.get("gemini-qq-bot"))
+            .and_then(|b| b.get("command"))
+            .and_then(|c| c.as_str())
+        else {
+            return false;
+        };
+        Path::new(cmd).exists()
+    };
+
+    if is_valid(&cli_mcp) && is_valid(&cfg_mcp) {
+        return;
+    }
+
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let payload = serde_json::json!({
+        "mcpServers": {
+            "gemini-qq-bot": {
+                "command": exe.display().to_string(),
+                "args": ["--mcp-memory"],
+                "env": {
+                    "GEMINI_MEMORY_DB": db_path.display().to_string()
+                }
+            }
+        }
+    });
+    let Ok(rendered) = serde_json::to_string_pretty(&payload) else {
+        return;
+    };
+    for target in [&cfg_mcp, &cli_mcp] {
+        if std::fs::symlink_metadata(target).is_ok() {
+            let _ = std::fs::remove_file(target);
+        }
+        let _ = std::fs::write(target, &rendered);
+    }
+}
+
 /// Whether the permission *file schema* could be verified against 1.4.6.
 ///
 /// The file **location** and the `permissions.allow` member are verified (see

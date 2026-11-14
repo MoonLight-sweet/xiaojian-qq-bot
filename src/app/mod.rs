@@ -147,6 +147,7 @@ impl App {
         // about this deployment's grants, not about an unknown file format.
         let permissions = crate::agent::agy::read_settings_permissions(&config.agy_settings_path)
             .unwrap_or_else(AgyPermissions::required);
+        crate::agent::agy::ensure_mcp_config(&config.agy_home, &config.db_path);
         let agy_health = AgyHealth::from_audit(permissions.audit(), &config.agy_model);
         // Runtime settings overlay: changes made through the settings API
         // persist next to the database and re-apply here, on top of the

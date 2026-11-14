@@ -213,6 +213,27 @@ impl Preflight {
         if images.is_empty() {
             return Vec::new();
         }
+        // When the aux backend is the single serialized `agy` session, fanning
+        // out N parallel calls just queues N turns behind one Mutex while all N
+        // 25s timers tick simultaneously. Pass the whole batch in one turn
+        // instead (AgyAuxClient stages every image as `@path` in one prompt).
+        if self.client.mode_name() == "agy" && images.len() > 1 {
+            let call = self.client.complete_vision_on(
+                VISION_MODELS[0],
+                TAG_SYSTEM,
+                TAG_PROMPT,
+                images,
+                None,
+            );
+            let Ok(Ok(raw)) = tokio::time::timeout(VISION_TIMEOUT, call).await else {
+                return Vec::new();
+            };
+            let mut tags = parse_tags(&raw);
+            tags.retain(|tag| tag.index >= 1 && tag.index <= images.len());
+            tags.sort_by_key(|tag| tag.index);
+            tags.dedup_by_key(|tag| tag.index);
+            return tags;
+        }
         let client = Arc::clone(&self.client);
         let mut tags: Vec<ImageTag> = stream::iter(images.iter().cloned().enumerate())
             .map(move |(index, url)| {
