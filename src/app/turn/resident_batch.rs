@@ -202,6 +202,7 @@ impl TurnExecutor {
             // messages. Past the soft cap the turn keeps running but stops taking
             // new work, so it converges instead of chasing the conversation.
             if std::time::Instant::now() < soft_deadline {
+                let insert_started_at = crate::now_unix();
                 match self
                     .try_resident_insert(
                         manager,
@@ -218,7 +219,7 @@ impl TurnExecutor {
                 {
                     Ok(Some(step_idx)) => {
                         spec.accept_insert(step_idx);
-                        last_insert_at = crate::now_unix();
+                        last_insert_at = insert_started_at;
                     }
                     Ok(None) => {}
                     Err(result) => {
@@ -308,6 +309,7 @@ impl TurnExecutor {
                         texts_show_prompt_rejection(parsed.events.iter().map(|e| e.text.as_str()))
                             || looks_like_prompt_rejection(&session.screen_text());
                     if self.output_channel.is_mcp() {
+                        let screen_idle = screen_is_idle_for_insert(&session.screen_text());
                         match self
                             .resident_submission_outcome(
                                 manager,
@@ -318,21 +320,22 @@ impl TurnExecutor {
                                 drafts,
                                 i64::from(inserts),
                                 last_insert_at,
+                                screen_idle,
                                 &coverage,
                                 prompt_rejected,
                                 first_turn_nudged,
                             )
                             .await
                         {
-                            SubmissionOutcome::Wait => continue,
+                            SubmissionOutcome::Wait => {}
                             SubmissionOutcome::Nudge => {
                                 match session
                                     .deliver(first_turn_nudge_prompt(self.output_channel))
                                     .await
                                 {
-                                    Ok(_) => {
+                                    Ok(receipt) => {
+                                        spec.accept_insert(receipt.step_idx);
                                         first_turn_nudged = true;
-                                        continue;
                                     }
                                     Err(err) => {
                                         return self
@@ -669,6 +672,7 @@ impl TurnExecutor {
                                 drafts,
                                 i64::from(inserts),
                                 last_insert_at,
+                                true,
                                 &coverage,
                                 texts_show_prompt_rejection(
                                     parsed.events.iter().map(|e| e.text.as_str()),
@@ -683,9 +687,9 @@ impl TurnExecutor {
                                     .deliver(first_turn_nudge_prompt(self.output_channel))
                                     .await
                                 {
-                                    Ok(_) => {
+                                    Ok(receipt) => {
+                                        spec.accept_insert(receipt.step_idx);
                                         first_turn_nudged = true;
-                                        continue;
                                     }
                                     Err(err) => {
                                         return self
@@ -843,6 +847,7 @@ impl TurnExecutor {
         drafts: i64,
         inserts: i64,
         last_insert_at: i64,
+        screen_idle: bool,
         coverage: &ResidentCoverage,
         prompt_rejected: bool,
         already_nudged: bool,
@@ -856,7 +861,31 @@ impl TurnExecutor {
         };
         let accepted: Vec<&crate::store::TurnSubmission> =
             rows.iter().filter(|r| r.verdict == "accepted").collect();
-        let Some(candidate) = accepted.last() else {
+        let fresh_candidate = accepted
+            .iter()
+            .rev()
+            .copied()
+            .find(|r| r.created_at >= last_insert_at)
+            .or_else(|| {
+                // If the model finished the post-insert turn and returned to the
+                // idle prompt without calling `submit_reply` again, fall back to
+                // an earlier non-refusal submission only after the nudge has
+                // already been spent; otherwise `None` triggers the nudge/retire
+                // path below instead of waiting forever on an idle TUI.
+                if screen_idle && !submission_nudge_due(already_nudged) {
+                    accepted
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|r| !payload_is_bare_refusal(&r.payload))
+                } else {
+                    None
+                }
+            });
+        if fresh_candidate.is_none() && !accepted.is_empty() && !screen_idle {
+            return SubmissionOutcome::Wait;
+        }
+        let Some(candidate) = fresh_candidate else {
             let _ = self
                 .store
                 .record_resident_counts(call_id, steps, inserts, drafts)
@@ -937,7 +966,7 @@ impl TurnExecutor {
         };
         // The settle second keeps a just-landed call from being committed
         // while the model is still mid-gesture after it.
-        if candidate.created_at < last_insert_at || crate::now_unix() - candidate.created_at < 1 {
+        if crate::now_unix() - candidate.created_at < 1 {
             return SubmissionOutcome::Wait;
         }
         if steps >= RESIDENT_STEP_ROTATE_LIMIT && payload_is_bare_refusal(&candidate.payload) {
