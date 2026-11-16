@@ -225,14 +225,14 @@ fn quote_notes_name_in_batch_refs_and_summarize_older_ones() {
         &summaries,
     );
     // In-batch: named by ref so she can answer with quote_ref: "m1".
-    assert_eq!(batch.messages[1].text, "对，就是这个（引用 m1）");
+    assert_eq!(batch.messages[1].text, "对，就是这个（回复 m1）");
     // Older but logged: the summary rides along.
     assert_eq!(
         batch.messages[2].text,
-        "那之前说的呢（引用更早的消息：「上周就定好了去吃火锅」）"
+        "那之前说的呢（回复消息“上周就定好了去吃火锅”）"
     );
     // Never logged: a plain marker, no invented content.
-    assert_eq!(batch.messages[3].text, "还有更早的（引用了更早的一条消息）");
+    assert_eq!(batch.messages[3].text, "还有更早的（回复了一条历史消息）");
     // Unquoted messages are untouched.
     assert_eq!(batch.messages[0].text, "今晚吃火锅");
 }

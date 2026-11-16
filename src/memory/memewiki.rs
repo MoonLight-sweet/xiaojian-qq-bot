@@ -56,18 +56,33 @@ pub fn extract_query(text: &str) -> Option<String> {
 
     // 1. 匹配典型的问梗句式
     const PATTERNS: [&str; 12] = [
-        "是什么梗", "啥梗", "什么来头", "什么来历",
-        "什么出处", "什么意思", "啥意思", "怎么用",
-        "怎么接", "怎么玩", "如何用", "是啥意思",
+        "是什么梗",
+        "啥梗",
+        "什么来头",
+        "什么来历",
+        "什么出处",
+        "什么意思",
+        "啥意思",
+        "怎么用",
+        "怎么接",
+        "怎么玩",
+        "如何用",
+        "是啥意思",
     ];
 
     for pat in PATTERNS {
         if let Some(idx) = t.find(pat) {
             let mut head = t[..idx].trim();
             // 剥离标点符号
-            head = head.trim_matches(|c: char| matches!(c, ' ' | '，' | ',' | '。' | '！' | '!' | '？' | '?'));
+            head = head.trim_matches(|c: char| {
+                matches!(c, ' ' | '，' | ',' | '。' | '！' | '!' | '？' | '?')
+            });
             head = head.trim_start_matches("是").trim_end_matches("是");
-            head = head.trim_end_matches("这个梗").trim_end_matches("那个梗").trim_end_matches("这梗").trim_end_matches("那梗");
+            head = head
+                .trim_end_matches("这个梗")
+                .trim_end_matches("那个梗")
+                .trim_end_matches("这梗")
+                .trim_end_matches("那梗");
             head = head.trim_end_matches("这个").trim_end_matches("那个");
             head = head.trim_end_matches("到底").trim_end_matches("究竟");
             let head = head.trim();
@@ -87,8 +102,17 @@ pub fn extract_query(text: &str) -> Option<String> {
     if (2..=10).contains(&char_count) && !is_stop_word(&t) && !is_chat_phrase(&t) {
         // 排除疑问词构成的整句
         const SENTENCE_PARTICLES: [&str; 11] = [
-            "怎么样", "怎么", "为什么", "能不能", "是不是",
-            "了吗", "了没", "一下", "你说", "要不要", "有没有",
+            "怎么样",
+            "怎么",
+            "为什么",
+            "能不能",
+            "是不是",
+            "了吗",
+            "了没",
+            "一下",
+            "你说",
+            "要不要",
+            "有没有",
         ];
         if SENTENCE_PARTICLES.iter().any(|p| t.contains(p)) {
             return None;
@@ -113,7 +137,12 @@ fn clean_text(text: &str) -> String {
     const WAKE_WORDS: [&str; 6] = ["小简", "Gemini", "gemini", "小猫", "猫猫", "bot"];
     for w in WAKE_WORDS {
         if let Some(stripped) = t.strip_prefix(w) {
-            t = stripped.trim().trim_matches(|c: char| matches!(c, ' ' | '，' | ',' | '。' | '！' | '!' | '？' | '?' | ':' | '：'));
+            t = stripped.trim().trim_matches(|c: char| {
+                matches!(
+                    c,
+                    ' ' | '，' | ',' | '。' | '！' | '!' | '？' | '?' | ':' | '：'
+                )
+            });
             break;
         }
     }
@@ -122,17 +151,49 @@ fn clean_text(text: &str) -> String {
 
 fn is_stop_word(word: &str) -> bool {
     const STOPS: [&str; 25] = [
-        "这", "那", "它", "他", "她", "这个", "那个", "你", "我", "谁", "什么", "哪",
-        "在吗", "在不在", "哈哈", "哈哈哈", "笑死", "好的", "好吧", "晚安", "早安",
-        "睡觉", "吃饭", "干嘛", "没事",
+        "这",
+        "那",
+        "它",
+        "他",
+        "她",
+        "这个",
+        "那个",
+        "你",
+        "我",
+        "谁",
+        "什么",
+        "哪",
+        "在吗",
+        "在不在",
+        "哈哈",
+        "哈哈哈",
+        "笑死",
+        "好的",
+        "好吧",
+        "晚安",
+        "早安",
+        "睡觉",
+        "吃饭",
+        "干嘛",
+        "没事",
     ];
     STOPS.contains(&word)
 }
 
 fn is_chat_phrase(word: &str) -> bool {
     const PHRASES: [&str; 12] = [
-        "我是谁", "今天吃什么", "今天看什么", "几点了", "天气怎么样",
-        "测试一下", "你在干嘛", "晚饭吃什么", "午饭吃什么", "早上好", "晚安啦", "笑死我了",
+        "我是谁",
+        "今天吃什么",
+        "今天看什么",
+        "几点了",
+        "天气怎么样",
+        "测试一下",
+        "你在干嘛",
+        "晚饭吃什么",
+        "午饭吃什么",
+        "早上好",
+        "晚安啦",
+        "笑死我了",
     ];
     PHRASES.contains(&word)
 }

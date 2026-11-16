@@ -145,14 +145,61 @@ pub fn strip_trailing_kaomoji(text: &str) -> String {
     }
 
     // 颜文字特征：包含典型的颜文字符号或口癖符号，且不包含常用汉字
-    let has_cjk = inside.chars().any(|c| ('\u{4e00}'..='\u{9fa5}').contains(&c));
+    let has_cjk = inside
+        .chars()
+        .any(|c| ('\u{4e00}'..='\u{9fa5}').contains(&c));
     if has_cjk {
         return trimmed.to_string();
     }
 
     // 检查是否包含颜文字常见构造成分（如 ¬, ‿, ω, ゝ, ╯, ︶, ▽, ◕, ﾟ, ｡, ¯, ˘, ⊙, ∀, ᐛ, ᐕ, 皿, 益 等，或纯符号混合）
-    let is_symbolic = inside.chars().all(|c| !c.is_alphanumeric() || matches!(c, 'v' | 'V' | 'o' | 'O' | 'x' | 'X' | 'w' | 'W' | 'u' | 'U' | 'T' | 'Q' | 'p' | 'P'));
-    let has_kaomoji_chars = inside.chars().any(|c| matches!(c, '¬' | '‿' | 'ω' | 'ゝ' | '╯' | '︶' | '▽' | '◕' | 'ﾟ' | '｡' | '¯' | '˘' | '⊙' | '∀' | 'ᐛ' | 'ᐕ' | 'Д' | 'Д' | 'д' | 'ㅂ' | '꒳' | 'ᴗ' | 'ᆺ' | 'ㅅ' | '・' | '´' | '`' | '*' | '^' | '-' | '=' | '_' | '/' | '\\' | '<' | '>'));
+    let is_symbolic = inside.chars().all(|c| {
+        !c.is_alphanumeric()
+            || matches!(
+                c,
+                'v' | 'V' | 'o' | 'O' | 'x' | 'X' | 'w' | 'W' | 'u' | 'U' | 'T' | 'Q' | 'p' | 'P'
+            )
+    });
+    let has_kaomoji_chars = inside.chars().any(|c| {
+        matches!(
+            c,
+            '¬' | '‿'
+                | 'ω'
+                | 'ゝ'
+                | '╯'
+                | '︶'
+                | '▽'
+                | '◕'
+                | 'ﾟ'
+                | '｡'
+                | '¯'
+                | '˘'
+                | '⊙'
+                | '∀'
+                | 'ᐛ'
+                | 'ᐕ'
+                | 'Д'
+                | 'Д'
+                | 'д'
+                | 'ㅂ'
+                | '꒳'
+                | 'ᴗ'
+                | 'ᆺ'
+                | 'ㅅ'
+                | '・'
+                | '´'
+                | '`'
+                | '*'
+                | '^'
+                | '-'
+                | '='
+                | '_'
+                | '/'
+                | '\\'
+                | '<'
+                | '>'
+        )
+    });
 
     if is_symbolic || has_kaomoji_chars {
         let prefix: String = chars[..start].iter().collect();

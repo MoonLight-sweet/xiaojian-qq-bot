@@ -388,8 +388,7 @@ impl TurnExecutor {
                         // the prompt never ran, so close it as what it is —
                         // before the refusal-shape checks below can mistake it
                         // for a contract the session chose to write.
-                        if !text.trim_start().starts_with('{')
-                            && looks_like_prompt_rejection(&text)
+                        if !text.trim_start().starts_with('{') && looks_like_prompt_rejection(&text)
                         {
                             let _ = self
                                 .store
@@ -407,7 +406,10 @@ impl TurnExecutor {
                             manager
                                 .audit(
                                     &job.group_id,
-                                    &format!("resident.turn.bare_refusal.g{}.step{idx}", job.group_id),
+                                    &format!(
+                                        "resident.turn.bare_refusal.g{}.step{idx}",
+                                        job.group_id
+                                    ),
                                 )
                                 .await;
                             return self
@@ -517,7 +519,11 @@ impl TurnExecutor {
                             // back (see SqliteStore::note_seed_clean_round).
                             let _ = self
                                 .store
-                                .note_seed_clean_round(&self.bot_id, &job.group_id, crate::now_unix())
+                                .note_seed_clean_round(
+                                    &self.bot_id,
+                                    &job.group_id,
+                                    crate::now_unix(),
+                                )
                                 .await;
                         }
 

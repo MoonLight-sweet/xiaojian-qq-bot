@@ -577,7 +577,9 @@ impl TurnExecutor {
         let mut meme_match: Option<String> = None;
         for msg in messages.iter().rev() {
             if let Some(query) = crate::memory::memewiki::extract_query(&msg.text) {
-                if let Some(meme) = crate::memory::memewiki::search_meme(&self.store.pool, &query).await {
+                if let Some(meme) =
+                    crate::memory::memewiki::search_meme(&self.store.pool, &query).await
+                {
                     let _ = self
                         .store
                         .audit(
@@ -707,14 +709,17 @@ impl TurnExecutor {
     }
 }
 
-
 fn extract_quote_from_onebot_json(val: &serde_json::Value) -> Option<String> {
     let sender_name = val.get("sender").and_then(|s| {
         let card = s.get("card").and_then(|v| v.as_str()).unwrap_or("").trim();
         if !card.is_empty() {
             Some(card.to_string())
         } else {
-            let nick = s.get("nickname").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let nick = s
+                .get("nickname")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
             if !nick.is_empty() {
                 Some(nick.to_string())
             } else {

@@ -414,7 +414,11 @@ pub fn normalize_segments(event: &RawEvent, bot_id: &str) -> Vec<Segment> {
                     }),
                     "record" => Some(Segment::Voice),
                     "face" => {
-                        let id_str = seg.data.as_ref().and_then(|d| d.id.clone()).unwrap_or_default();
+                        let id_str = seg
+                            .data
+                            .as_ref()
+                            .and_then(|d| d.id.clone())
+                            .unwrap_or_default();
                         Some(Segment::Text {
                             text: if id_str.is_empty() {
                                 "[表情]".to_string()
@@ -430,7 +434,11 @@ pub fn normalize_segments(event: &RawEvent, bot_id: &str) -> Vec<Segment> {
                         })
                     }
                     "mface" => {
-                        let summary = seg.data.as_ref().and_then(|d| d.summary.clone()).unwrap_or_default();
+                        let summary = seg
+                            .data
+                            .as_ref()
+                            .and_then(|d| d.summary.clone())
+                            .unwrap_or_default();
                         let url = seg.data.as_ref().and_then(|d| d.url.clone());
                         if !summary.is_empty() {
                             let text = if summary.starts_with('[') && summary.ends_with(']') {
@@ -446,7 +454,9 @@ pub fn normalize_segments(event: &RawEvent, bot_id: &str) -> Vec<Segment> {
                                 sub_type: Some("1".to_string()),
                             })
                         } else {
-                            Some(Segment::Text { text: "[动画表情]".to_string() })
+                            Some(Segment::Text {
+                                text: "[动画表情]".to_string(),
+                            })
                         }
                     }
                     // Pokes are handled at the event level (see the scan in
@@ -543,7 +553,6 @@ pub fn escape_cq(text: &str) -> String {
     }
     out
 }
-
 
 /// Resolve QQ yellow face emoji ID to human-readable label.
 pub fn qq_face_name(id: u32) -> Option<&'static str> {
@@ -1051,7 +1060,7 @@ mod tests {
         }
     }
 
-      #[test]
+    #[test]
     fn unsupported_segment_is_preserved_as_kind() {
         let ev = event(
             r#"{"post_type":"message","message_type":"group","group_id":"100","user_id":"1","message_id":"1","self_id":"999",
@@ -1059,7 +1068,12 @@ mod tests {
         );
         match normalize_event(&ev, BOT, OWNER, "u1", 0) {
             Normalized::Message(m) => {
-                assert_eq!(m.segments[0], Segment::Unsupported { seg: "custom_unsupported".into() });
+                assert_eq!(
+                    m.segments[0],
+                    Segment::Unsupported {
+                        seg: "custom_unsupported".into()
+                    }
+                );
                 assert_eq!(m.text, "hi");
             }
             other => panic!("预期消息: {other:?}"),
@@ -1074,8 +1088,18 @@ mod tests {
         );
         match normalize_event(&ev, BOT, OWNER, "u1", 0) {
             Normalized::Message(m) => {
-                assert_eq!(m.segments[0], Segment::Text { text: "[滑稽]".into() });
-                assert_eq!(m.segments[1], Segment::Text { text: "[微笑]".into() });
+                assert_eq!(
+                    m.segments[0],
+                    Segment::Text {
+                        text: "[滑稽]".into()
+                    }
+                );
+                assert_eq!(
+                    m.segments[1],
+                    Segment::Text {
+                        text: "[微笑]".into()
+                    }
+                );
                 assert_eq!(m.text, "[滑稽][微笑]");
             }
             other => panic!("预期消息: {other:?}"),

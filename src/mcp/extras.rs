@@ -192,23 +192,39 @@ fn strip_bili_emote_brackets(text: &str) -> String {
 
 fn infer_comment_emotion(text: &str) -> String {
     let mut tags = Vec::new();
-    if text.contains("笑") || text.contains("哈") || text.contains("草") || text.contains("蚌") || text.contains("乐") {
+    if text.contains("笑")
+        || text.contains("哈")
+        || text.contains("草")
+        || text.contains("蚌")
+        || text.contains("乐")
+    {
         tags.push("搞笑");
         tags.push("大笑");
     }
-    if text.contains("？”") || text.contains("？") || text.contains("?") || text.contains("懵") || text.contains("啥") {
+    if text.contains("？”")
+        || text.contains("？")
+        || text.contains("?")
+        || text.contains("懵")
+        || text.contains("啥")
+    {
         tags.push("疑惑");
         tags.push("无语");
     }
-    if text.contains("哭") || text.contains("泪") || text.contains("惨") || text.contains("破防") {
+    if text.contains("哭") || text.contains("泪") || text.contains("惨") || text.contains("破防")
+    {
         tags.push("委屈");
         tags.push("破防");
     }
-    if text.contains("怒") || text.contains("气") || text.contains("急") || text.contains("滚") {
+    if text.contains("怒") || text.contains("气") || text.contains("急") || text.contains("滚")
+    {
         tags.push("生气");
         tags.push("嫌弃");
     }
-    if text.contains("可爱") || text.contains("好耶") || text.contains("喜欢") || text.contains("爱") {
+    if text.contains("可爱")
+        || text.contains("好耶")
+        || text.contains("喜欢")
+        || text.contains("爱")
+    {
         tags.push("开心");
         tags.push("得意");
     }
@@ -300,7 +316,14 @@ async fn fetch_comments_and_harvest_stickers(
                 let desc = format!(
                     "B站评论梗图（{}）配文：{}",
                     short_title,
-                    truncate_chars(if clean_msg.is_empty() { "热评配图" } else { &clean_msg }, 22)
+                    truncate_chars(
+                        if clean_msg.is_empty() {
+                            "热评配图"
+                        } else {
+                            &clean_msg
+                        },
+                        22
+                    )
                 );
                 candidates.push(CommentStickerCandidate {
                     img_url: normalize_bili_img_url(src),
@@ -332,7 +355,14 @@ async fn fetch_comments_and_harvest_stickers(
                     description: format!(
                         "B站表情「{}」配评：{}",
                         title,
-                        truncate_chars(if clean_msg.is_empty() { video_title } else { &clean_msg }, 20)
+                        truncate_chars(
+                            if clean_msg.is_empty() {
+                                video_title
+                            } else {
+                                &clean_msg
+                            },
+                            20
+                        )
                     ),
                     emotion: format!("{title}/{}", infer_comment_emotion(&msg)),
                     // Large Bilibili stickers (size == 2) get same priority as user pictures
@@ -383,7 +413,14 @@ async fn fetch_comments_and_harvest_stickers(
                         if let Some(src) = p.get("img_src").and_then(Value::as_str) {
                             candidates.push(CommentStickerCandidate {
                                 img_url: normalize_bili_img_url(src),
-                                ocr: truncate_chars(if clean_sub.is_empty() { &short_title } else { &clean_sub }, 22),
+                                ocr: truncate_chars(
+                                    if clean_sub.is_empty() {
+                                        &short_title
+                                    } else {
+                                        &clean_sub
+                                    },
+                                    22,
+                                ),
                                 description: format!(
                                     "B站楼中楼梗图（{}）：{}",
                                     short_title,
@@ -520,7 +557,10 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
                     .pointer("/owner/name")
                     .and_then(Value::as_str)
                     .unwrap_or("未知UP");
-                let view = item.pointer("/stat/view").and_then(Value::as_i64).unwrap_or(0);
+                let view = item
+                    .pointer("/stat/view")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 let danmaku = item
                     .pointer("/stat/danmaku")
                     .and_then(Value::as_i64)
@@ -571,7 +611,9 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
                 }
             }
             if !all_harvested.is_empty() {
-                lines.push("【顺手从B站评论区收入你表情库的新表情包（可直接用 hash 发送）】".to_string());
+                lines.push(
+                    "【顺手从B站评论区收入你表情库的新表情包（可直接用 hash 发送）】".to_string(),
+                );
                 lines.extend(all_harvested);
             }
             lines.push("（想深挖某个视频的评论区或专门搜集更多评论区表情包，可用 mode=\"view\" 或 mode=\"comments\" 并传入 bvid）".to_string());
@@ -603,13 +645,19 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
                     && let Some(arr) = v.pointer("/data/list").and_then(Value::as_array)
                 {
                     let idx = (now as usize) % arr.len().max(1);
-                    if let Some(chosen) = arr.get(idx).and_then(|it| it.get("bvid")).and_then(Value::as_str) {
+                    if let Some(chosen) = arr
+                        .get(idx)
+                        .and_then(|it| it.get("bvid"))
+                        .and_then(Value::as_str)
+                    {
                         bvid = chosen.to_string();
                     }
                 }
             }
             if bvid.is_empty() {
-                return tool_err("请提供 bvid（例如 BV1xx...），或使用 mode=\"comments\" 自动巡航热门评论区");
+                return tool_err(
+                    "请提供 bvid（例如 BV1xx...），或使用 mode=\"comments\" 自动巡航热门评论区",
+                );
             }
             let view_url = format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}");
             let resp = match client.get(&view_url).send().await {
@@ -635,9 +683,18 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
                 .unwrap_or("")
                 .replace('\n', " ");
             let pic = data.get("pic").and_then(Value::as_str).unwrap_or("");
-            let view = data.pointer("/stat/view").and_then(Value::as_i64).unwrap_or(0);
-            let like = data.pointer("/stat/like").and_then(Value::as_i64).unwrap_or(0);
-            let coin = data.pointer("/stat/coin").and_then(Value::as_i64).unwrap_or(0);
+            let view = data
+                .pointer("/stat/view")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let like = data
+                .pointer("/stat/like")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let coin = data
+                .pointer("/stat/coin")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
 
             let mut lines = vec![
                 format!("【B站视频与评论区】[{bvid}] 《{title}》"),
@@ -648,10 +705,9 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
                 lines.push(format!("封面图URL：{pic}"));
             }
 
-            let (comments, harvested) = fetch_comments_and_harvest_stickers(
-                &client, store, scope, aid, title, 12, 5, now,
-            )
-            .await;
+            let (comments, harvested) =
+                fetch_comments_and_harvest_stickers(&client, store, scope, aid, title, 12, 5, now)
+                    .await;
             if !comments.is_empty() {
                 lines.push("【评论区高赞神评与楼中楼】".to_string());
                 lines.extend(comments);
@@ -683,7 +739,8 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
             }
             // Obtain cookies from bilibili.com first so search API doesn't reject with -412
             let _ = client.get("https://www.bilibili.com").send().await;
-            let encoded: String = url::form_urlencoded::byte_serialize(keyword.as_bytes()).collect();
+            let encoded: String =
+                url::form_urlencoded::byte_serialize(keyword.as_bytes()).collect();
             let search_url = format!(
                 "https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword={encoded}&page=1&page_size={limit}"
             );
@@ -706,7 +763,9 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
                 .cloned()
                 .unwrap_or_default();
             if results.is_empty() {
-                return tool_ok(format!("没有搜到关于「{keyword}」的B站视频，可以试试 mode=\"popular\" 看热门榜。"));
+                return tool_ok(format!(
+                    "没有搜到关于「{keyword}」的B站视频，可以试试 mode=\"popular\" 看热门榜。"
+                ));
             }
             let mut lines = vec![format!("【B站搜索：{keyword}】")];
             let mut first_aid = 0i64;
@@ -722,7 +781,10 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
                     first_aid = aid;
                     first_title = title.clone();
                 }
-                let author = item.get("author").and_then(Value::as_str).unwrap_or("未知UP");
+                let author = item
+                    .get("author")
+                    .and_then(Value::as_str)
+                    .unwrap_or("未知UP");
                 let play = item.get("play").and_then(Value::as_i64).unwrap_or(0);
                 let desc = item
                     .get("description")
@@ -780,7 +842,9 @@ pub async fn call_bilibili(store: &SqliteStore, scope: &Scope, args: &Value) -> 
                 .await;
             tool_ok(lines.join("\n"))
         }
-        other => tool_err(format!("未知 mode：{other}，请使用 popular / view / comments / search")),
+        other => tool_err(format!(
+            "未知 mode：{other}，请使用 popular / view / comments / search"
+        )),
     }
 }
 
@@ -914,8 +978,9 @@ async fn resolve_avatar_source(
             Ok(Some(h)) => h,
             _ => {
                 return Err(
-                    "头像参数必须是 http(s):// 图片直链，或表情库中已有的 #xxxxxxxx 句柄".to_string(),
-                )
+                    "头像参数必须是 http(s):// 图片直链，或表情库中已有的 #xxxxxxxx 句柄"
+                        .to_string(),
+                );
             }
         },
         Err(_) => return Err("读取表情库失败".to_string()),
@@ -1064,7 +1129,9 @@ pub async fn call_profile_update(store: &SqliteStore, scope: &Scope, args: &Valu
                     .await;
                 done.push(format!("本群群名称已改为「{gname}」"));
             }
-            Err(e) => errors.push(format!("改群名称失败（请确认机器人是否已设为群管理员）: {e}")),
+            Err(e) => errors.push(format!(
+                "改群名称失败（请确认机器人是否已设为群管理员）: {e}"
+            )),
         }
     }
 
@@ -1080,7 +1147,9 @@ pub async fn call_profile_update(store: &SqliteStore, scope: &Scope, args: &Valu
             .await
             {
                 Ok(_) => done.push("本群群聊头像已更新".to_string()),
-                Err(e) => errors.push(format!("改群头像失败（请确认机器人是否已设为群管理员）: {e}")),
+                Err(e) => errors.push(format!(
+                    "改群头像失败（请确认机器人是否已设为群管理员）: {e}"
+                )),
             },
             Err(e) => errors.push(e),
         }
@@ -1095,14 +1164,24 @@ pub async fn call_profile_update(store: &SqliteStore, scope: &Scope, args: &Valu
             format!("mcp.profile.self_update.g{}", scope.group_id)
         };
         let _ = store
-            .audit("agent", &tag, Some(&scope.bot_id), Some(&scope.group_id), now)
+            .audit(
+                "agent",
+                &tag,
+                Some(&scope.bot_id),
+                Some(&scope.group_id),
+                now,
+            )
             .await;
     }
 
     if errors.is_empty() {
         tool_ok(done.join("；"))
     } else if !done.is_empty() {
-        tool_ok(format!("部分成功：{}（失败：{}）", done.join("；"), errors.join("；")))
+        tool_ok(format!(
+            "部分成功：{}（失败：{}）",
+            done.join("；"),
+            errors.join("；")
+        ))
     } else {
         tool_err(errors.join("；"))
     }
@@ -1179,11 +1258,7 @@ pub async fn call_qzone_publish(store: &SqliteStore, scope: &Scope, args: &Value
     }
 }
 
-pub async fn call_search_meme_wiki(
-    store: &SqliteStore,
-    _scope: &Scope,
-    args: &Value,
-) -> Value {
+pub async fn call_search_meme_wiki(store: &SqliteStore, _scope: &Scope, args: &Value) -> Value {
     let query = match args.get("query").and_then(Value::as_str) {
         Some(q) if !q.trim().is_empty() => q.trim(),
         _ => return tool_err("缺少 query 参数或 query 为空"),
@@ -1214,6 +1289,8 @@ pub async fn call_search_meme_wiki(
             }
             tool_ok(text)
         }
-        None => tool_ok(format!("梗百科知识库中暂未收录「{query}」相关词条。可以如实回答不知道，或结合上下文自然接话，切勿胡编乱造。")),
+        None => tool_ok(format!(
+            "梗百科知识库中暂未收录「{query}」相关词条。可以如实回答不知道，或结合上下文自然接话，切勿胡编乱造。"
+        )),
     }
 }

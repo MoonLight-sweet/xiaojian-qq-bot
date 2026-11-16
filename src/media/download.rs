@@ -229,7 +229,9 @@ impl ImageFetcher for HttpFetcher {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let is_image_ct = content_type.starts_with("image/") || content_type == "application/octet-stream" || content_type.is_empty();
+        let is_image_ct = content_type.starts_with("image/")
+            || content_type == "application/octet-stream"
+            || content_type.is_empty();
         if !is_image_ct {
             tracing::warn!("image download non-image content-type: {}", content_type);
             return Err(MediaError::NotAnImage);
