@@ -151,8 +151,19 @@ export interface Memory {
   kind: string;
   content: string;
   created_at?: number;
+  updated_at?: number;
+  archived_at?: number | null;
   origin?: string;
   [key: string]: unknown;
+}
+
+export interface HotMeme {
+  meme_ref: string;
+  content: string;
+  source: string;
+  confidence: number;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface Sticker {

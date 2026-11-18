@@ -5,9 +5,9 @@
 功能：
 1. 定时拉取全网流行热点趋势（B站、短视频等综合热榜）；
 2. 抓取小黑盒/核心游戏社区热议话题、Steam喜加一与玩家黑话；
-3. 过滤无关违规内容，提取适合黑猫傲娇俏皮人设打趣、调侃的接地气素材；
-4. 将新梗录入长期记忆库（memories 表），设定 14 天生命周期时效；
-5. 自动扫描并归档（淘汰）过气老梗，保持机器人的梗库始终处于当下最新鲜活跃状态。
+3. 过滤无关违规内容，提取适合温柔猫系少女日常聊天的接地气素材；
+4. 将新梗录入独立的热梗记忆表（hot_memes 表，与群聊记忆 memories 表彻底分离），设定 14 天生命周期时效；
+5. 自动扫描并归档（淘汰）过气老梗，保持机器人的热梗记忆库始终处于当下最新鲜活跃状态。
 """
 
 import urllib.request
@@ -104,7 +104,6 @@ def fetch_gaming_hot_topics():
                 items = data.get("data", {}).get("list", [])
                 for item in items[:15]:
                     title = item.get("title", "").strip()
-                    # 清洗标题特殊符号
                     clean_title = re.sub(r'【.*?】|\[.*?\]', '', title).strip()
                     if clean_title and len(clean_title) >= 4:
                         if not any(bk in clean_title for bk in BLOCK_KEYWORDS):
@@ -112,6 +111,25 @@ def fetch_gaming_hot_topics():
     except Exception as e:
         print(f"[WARN] 获取游戏热点榜失败: {e}")
     return gaming_topics
+
+def ensure_hot_memes_table(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS hot_memes (
+            meme_ref    TEXT PRIMARY KEY,
+            bot_id      TEXT NOT NULL,
+            group_id    TEXT NOT NULL,
+            content     TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'trending_sync',
+            confidence  REAL NOT NULL DEFAULT 0.9,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL,
+            archived_at INTEGER
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_hot_memes_group_active
+            ON hot_memes(bot_id, group_id, archived_at, updated_at DESC)
+    """)
 
 def update_memes_and_evict_old():
     if not os.path.exists(DB_PATH):
@@ -121,13 +139,14 @@ def update_memes_and_evict_old():
     now = int(time.time())
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    ensure_hot_memes_table(cursor)
 
-    # 1. 淘汰过气老梗：将超过 14 天 TTL 且未归档的 meme 自动标记归档
+    # 1. 淘汰过气老梗：将超过 14 天 TTL 且未归档的 hot_memes 自动标记归档
     expire_cutoff = now - MEME_TTL_SECONDS
     cursor.execute("""
-        UPDATE memories 
+        UPDATE hot_memes
         SET archived_at = ?, updated_at = ?
-        WHERE kind = 'meme' AND created_at < ? AND archived_at IS NULL
+        WHERE created_at < ? AND archived_at IS NULL
     """, (now, now, expire_cutoff))
     evicted_count = cursor.rowcount
     if evicted_count > 0:
@@ -140,18 +159,16 @@ def update_memes_and_evict_old():
     print(f"[FETCH] 获取到 {len(trending)} 条全网新鲜热搜话题。")
     for topic in trending[:6]:
         ref = f"meme_{int(time.time()*1000)%100000000}_{inserted}"
-        content = f"网络新鲜热点与流行梗（当下活跃流行）：{topic}。可作为聊天打趣、调侃或接梗素材，遇到群友讨论可自然接话。"
-        
-        cursor.execute("SELECT memory_ref FROM memories WHERE kind = 'meme' AND content LIKE ? AND archived_at IS NULL", (f"%{topic}%",))
+        content = f"网络新鲜热点与流行梗（当下活跃流行）：{topic}。遇到群友讨论可自然接话。"
+
+        cursor.execute("SELECT meme_ref FROM hot_memes WHERE content LIKE ? AND archived_at IS NULL", (f"%{topic}%",))
         if cursor.fetchone() is not None:
             continue
 
         cursor.execute("""
-            INSERT INTO memories (
-                memory_ref, bot_id, group_id, subject_user_id,
-                content, kind, source_message_ids, confidence,
-                revision, created_at, updated_at, origin, archived_at
-            ) VALUES (?, ?, ?, NULL, ?, 'meme', '[]', 0.9, 1, ?, ?, 'trending_sync', NULL)
+            INSERT INTO hot_memes (
+                meme_ref, bot_id, group_id, content, source, confidence, created_at, updated_at, archived_at
+            ) VALUES (?, ?, ?, ?, 'trending_sync', 0.9, ?, ?, NULL)
         """, (ref, BOT_ID, GROUP_ID, content, now, now))
         inserted += 1
 
@@ -160,37 +177,33 @@ def update_memes_and_evict_old():
     print(f"[FETCH] 获取到 {len(gaming_hot)} 条核心游戏区热度榜话题。")
     for gtopic in gaming_hot[:4]:
         ref = f"meme_game_{int(time.time()*1000)%100000000}_{inserted}"
-        content = f"小黑盒/游戏圈当下热议话题：{gtopic}。适合在群友聊游戏、Steam、通关、攻略或吐槽游戏体验时作为内行玩家话题自然切入。"
+        content = f"小黑盒/游戏圈当下热议话题：{gtopic}。适合在群友聊游戏、Steam、通关、攻略或吐槽游戏体验时自然切入。"
 
-        cursor.execute("SELECT memory_ref FROM memories WHERE kind = 'meme' AND content LIKE ? AND archived_at IS NULL", (f"%{gtopic[:15]}%",))
+        cursor.execute("SELECT meme_ref FROM hot_memes WHERE content LIKE ? AND archived_at IS NULL", (f"%{gtopic[:15]}%",))
         if cursor.fetchone() is not None:
             continue
 
         cursor.execute("""
-            INSERT INTO memories (
-                memory_ref, bot_id, group_id, subject_user_id,
-                content, kind, source_message_ids, confidence,
-                revision, created_at, updated_at, origin, archived_at
-            ) VALUES (?, ?, ?, NULL, ?, 'meme', '[]', 0.9, 1, ?, ?, 'heybox_sync', NULL)
+            INSERT INTO hot_memes (
+                meme_ref, bot_id, group_id, content, source, confidence, created_at, updated_at, archived_at
+            ) VALUES (?, ?, ?, ?, 'heybox_sync', 0.9, ?, ?, NULL)
         """, (ref, BOT_ID, GROUP_ID, content, now, now))
         inserted += 1
 
-    # 4. 补充小黑盒常驻玩家黑话与吐槽（轮换选取 3 个未入库或已过期的梗激活）
+    # 4. 补充小黑盒常驻玩家黑话与吐槽（轮换选取未入库或已过期的梗激活）
     for item in HEYBOX_GAMING_MEMES:
         t = item["topic"]
         d = item["desc"]
-        cursor.execute("SELECT memory_ref FROM memories WHERE kind = 'meme' AND content LIKE ? AND archived_at IS NULL", (f"%{t}%",))
+        cursor.execute("SELECT meme_ref FROM hot_memes WHERE content LIKE ? AND archived_at IS NULL", (f"%{t}%",))
         if cursor.fetchone() is not None:
             continue
 
         ref = f"meme_lingo_{int(time.time()*1000)%100000000}_{inserted}"
-        content = f"小黑盒/玩家圈黑话与游戏梗：【{t}】。{d} 群友聊游戏、抽卡、受苦或自嘲时可自然接话调侃。"
+        content = f"小黑盒/玩家圈黑话与游戏梗：【{t}】。{d}"
         cursor.execute("""
-            INSERT INTO memories (
-                memory_ref, bot_id, group_id, subject_user_id,
-                content, kind, source_message_ids, confidence,
-                revision, created_at, updated_at, origin, archived_at
-            ) VALUES (?, ?, ?, NULL, ?, 'meme', '[]', 0.95, 1, ?, ?, 'heybox_lingo', NULL)
+            INSERT INTO hot_memes (
+                meme_ref, bot_id, group_id, content, source, confidence, created_at, updated_at, archived_at
+            ) VALUES (?, ?, ?, ?, 'heybox_lingo', 0.95, ?, ?, NULL)
         """, (ref, BOT_ID, GROUP_ID, content, now, now))
         inserted += 1
         if inserted >= 12:
@@ -198,7 +211,7 @@ def update_memes_and_evict_old():
 
     conn.commit()
     conn.close()
-    print(f"[SUCCESS] 流程完成！当前新录入 {inserted} 个热梗与小黑盒游戏社区知识！")
+    print(f"[SUCCESS] 流程完成！当前新录入 {inserted} 个热梗至 hot_memes 表！")
 
 if __name__ == '__main__':
     update_memes_and_evict_old()

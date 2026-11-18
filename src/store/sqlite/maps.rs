@@ -6,8 +6,8 @@ use sqlx::Row;
 use crate::error::BotResult;
 
 use crate::store::{
-    CompactionJob, GroupMessageRecord, MemoryChunkRecord, MemoryRecord, OutboxRecord,
-    PendingEventRow, StickerRecord,
+    CompactionJob, GroupMessageRecord, HotMemeRecord, MemoryChunkRecord, MemoryRecord,
+    OutboxRecord, PendingEventRow, StickerRecord,
 };
 
 pub(super) fn map_pending(r: sqlx::sqlite::SqliteRow) -> PendingEventRow {
@@ -97,6 +97,20 @@ pub(super) fn map_memory(r: sqlx::sqlite::SqliteRow) -> MemoryRecord {
         archived_at: r.get("archived_at"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
+    }
+}
+
+pub(super) fn map_hot_meme(r: sqlx::sqlite::SqliteRow) -> HotMemeRecord {
+    HotMemeRecord {
+        meme_ref: r.get("meme_ref"),
+        bot_id: r.get("bot_id"),
+        group_id: r.get("group_id"),
+        content: r.get("content"),
+        source: r.get("source"),
+        confidence: r.get("confidence"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+        archived_at: r.get("archived_at"),
     }
 }
 

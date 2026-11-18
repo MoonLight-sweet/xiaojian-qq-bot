@@ -27,7 +27,7 @@ impl SqliteStore {
             "SELECT memory_ref, bot_id, group_id, subject_user_id, content, kind,
                     source_message_ids, confidence, revision, origin, archived_at,
                     created_at, updated_at
-             FROM memories WHERE bot_id = ? AND group_id = ? AND archived_at IS NULL
+             FROM memories WHERE bot_id = ? AND group_id = ? AND archived_at IS NULL AND kind != 'meme'
              ORDER BY updated_at DESC, memory_ref DESC LIMIT ?",
         )
         .bind(bot_id)
@@ -53,8 +53,8 @@ impl SqliteStore {
             "SELECT memory_ref, bot_id, group_id, subject_user_id, content, kind,
                     source_message_ids, confidence, revision, origin, archived_at,
                     created_at, updated_at
-             FROM memories WHERE bot_id = ? AND group_id = ?
-             ORDER BY updated_at DESC, memory_ref DESC LIMIT ? OFFSET ?",
+             FROM memories WHERE bot_id = ? AND group_id = ? AND kind != 'meme'
+             ORDER BY (archived_at IS NOT NULL) ASC, updated_at DESC, memory_ref DESC LIMIT ? OFFSET ?",
         )
         .bind(bot_id)
         .bind(group_id)
@@ -67,13 +67,87 @@ impl SqliteStore {
 
     /// Total memory rows in a group, so the panel can page without guessing.
     pub async fn count_memories(&self, bot_id: &str, group_id: &str) -> BotResult<i64> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE bot_id = ? AND group_id = ?")
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memories WHERE bot_id = ? AND group_id = ? AND kind != 'meme'",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
+    /// Active (non-archived) hot meme entries for a group.
+    pub async fn list_active_hot_memes(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+        limit: i64,
+    ) -> BotResult<Vec<HotMemeRecord>> {
+        let rows = sqlx::query(
+            "SELECT meme_ref, bot_id, group_id, content, source, confidence,
+                    created_at, updated_at, archived_at
+             FROM hot_memes WHERE bot_id = ? AND group_id = ? AND archived_at IS NULL
+             ORDER BY updated_at DESC, meme_ref DESC LIMIT ?",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(map_hot_meme).collect())
+    }
+
+    /// One page of hot meme entries for the panel, active ones first.
+    pub async fn list_hot_memes_page(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> BotResult<Vec<HotMemeRecord>> {
+        let rows = sqlx::query(
+            "SELECT meme_ref, bot_id, group_id, content, source, confidence,
+                    created_at, updated_at, archived_at
+             FROM hot_memes WHERE bot_id = ? AND group_id = ? AND archived_at IS NULL
+             ORDER BY updated_at DESC, meme_ref DESC LIMIT ? OFFSET ?",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(map_hot_meme).collect())
+    }
+
+    /// Total active hot meme rows in a group.
+    pub async fn count_hot_memes(&self, bot_id: &str, group_id: &str) -> BotResult<i64> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM hot_memes WHERE bot_id = ? AND group_id = ? AND archived_at IS NULL",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
+    /// Delete one hot meme entry from the operator panel.
+    pub async fn delete_hot_meme(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+        meme_ref: &str,
+    ) -> BotResult<bool> {
+        let res =
+            sqlx::query("DELETE FROM hot_memes WHERE bot_id = ? AND group_id = ? AND meme_ref = ?")
                 .bind(bot_id)
                 .bind(group_id)
-                .fetch_one(&self.pool)
+                .bind(meme_ref)
+                .execute(&self.pool)
                 .await?;
-        Ok(count)
+        Ok(res.rows_affected() > 0)
     }
 
     /// Total sticker rows matching the `kept` filter, so the panel can page them.

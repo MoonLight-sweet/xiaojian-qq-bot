@@ -228,3 +228,65 @@ pub(super) async fn delete_memory(
         .await;
     ok_json(json!({ "ok": true }))
 }
+
+/// List separated hot meme entries for one group.
+pub(super) async fn list_hot_memes(
+    State(state): State<Arc<AdminState>>,
+    AxumPath(group_id): AxumPath<String>,
+    Query(page): Query<PageQuery>,
+) -> ApiResult {
+    let group_id = checked_group_id(&group_id)?;
+    let (limit, offset) = page.window();
+    let hot_memes = state
+        .store
+        .list_hot_memes_page(&state.bot_id, &group_id, limit, offset)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let total = state
+        .store
+        .count_hot_memes(&state.bot_id, &group_id)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    ok_json(json!({
+        "group_id": group_id,
+        "total": total,
+        "hot_memes": hot_memes
+            .into_iter()
+            .map(|hm| json!({
+                "meme_ref": hm.meme_ref,
+                "content": hm.content,
+                "source": hm.source,
+                "confidence": hm.confidence,
+                "created_at": hm.created_at,
+                "updated_at": hm.updated_at,
+            }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+pub(super) async fn delete_hot_meme(
+    State(state): State<Arc<AdminState>>,
+    AxumPath((group_id, meme_ref)): AxumPath<(String, String)>,
+) -> ApiResult {
+    let group_id = checked_group_id(&group_id)?;
+    let now = crate::now_unix();
+    let removed = state
+        .store
+        .delete_hot_meme(&state.bot_id, &group_id, &meme_ref)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    if !removed {
+        return Err(ApiError::not_found("not_found"));
+    }
+    let _ = state
+        .store
+        .audit(
+            ActorKind::Panel.as_str(),
+            "hot_meme.delete",
+            Some(&state.bot_id),
+            Some(&group_id),
+            now,
+        )
+        .await;
+    ok_json(json!({ "ok": true }))
+}

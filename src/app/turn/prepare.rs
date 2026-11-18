@@ -573,8 +573,8 @@ impl TurnExecutor {
         prompt_batch.flooded = job.flooded;
         prompt_batch.flood_background = job.flood_background.clone();
 
-        // 梗百科前置自动预查（dsh-memewiki 架构）：检测本批消息中是否存在问梗或黑话，命中则注入
-        let mut meme_match: Option<String> = None;
+        // 梗百科与独立热梗记忆预查：检测本批消息中是否存在问梗、黑话或关联热梗，命中则走独立热梗通道注入（与群聊记忆彻底分离）
+        let mut meme_sections: Vec<String> = Vec::new();
         for msg in messages.iter().rev() {
             if let Some(query) = crate::memory::memewiki::extract_query(&msg.text) {
                 if let Some(meme) =
@@ -590,12 +590,45 @@ impl TurnExecutor {
                             crate::now_unix(),
                         )
                         .await;
-                    meme_match = Some(meme.render_context());
+                    meme_sections.push(meme.render_context());
                     break;
                 }
             }
         }
-        prompt_batch.meme_wiki_context = meme_match;
+        if let Ok(hot_memes) = self
+            .store
+            .list_active_hot_memes(&self.bot_id, &job.group_id, 50)
+            .await
+        {
+            let q_bigrams = crate::memory::retrieval::bigrams(&query_text);
+            if !q_bigrams.is_empty() {
+                let mut matched_hot: Vec<(f64, &crate::store::HotMemeRecord)> = hot_memes
+                    .iter()
+                    .filter_map(|hm| {
+                        let score = crate::memory::retrieval::overlap_score(
+                            &q_bigrams,
+                            &crate::memory::retrieval::bigrams(&hm.content),
+                        );
+                        (score >= 0.08).then_some((score, hm))
+                    })
+                    .collect();
+                matched_hot
+                    .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                matched_hot.truncate(2);
+                if !matched_hot.is_empty() {
+                    let mut hot_block = String::from("【独立热梗记忆参考】：\n");
+                    for (_, hm) in matched_hot {
+                        hot_block.push_str(&format!("- [{}] {}\n", hm.source, hm.content));
+                    }
+                    meme_sections.push(hot_block);
+                }
+            }
+        }
+        prompt_batch.meme_wiki_context = if meme_sections.is_empty() {
+            None
+        } else {
+            Some(meme_sections.join("\n"))
+        };
 
         // An update still needs its key to survive validation, so every key the digest
         // exposed is accepted even if the digest's own pass picked it up through an

@@ -166,6 +166,20 @@ impl MemoryRecord {
     }
 }
 
+/// One row of the separated `hot_memes` table (daily trending / Heybox gaming memes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotMemeRecord {
+    pub meme_ref: String,
+    pub bot_id: String,
+    pub group_id: String,
+    pub content: String,
+    pub source: String,
+    pub confidence: f64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub archived_at: Option<i64>,
+}
+
 /// One row of the raw group log. Never deleted by the bot: archiving only flips a
 /// flag, so a bad summary can always be recomputed from the source.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { apiGet, apiSend, type Group, type Memory } from "../api";
+import { apiGet, apiSend, type Group, type HotMeme, type Memory } from "../api";
 import { ErrorBox, Loading, Notice, unixTime, useFetch } from "../ui";
 
 const PACES = [
@@ -19,6 +19,7 @@ export default function Groups() {
   );
   const [notice, setNotice] = useState<string | null>(null);
   const [openMemories, setOpenMemories] = useState<string | null>(null);
+  const [openHotMemes, setOpenHotMemes] = useState<string | null>(null);
 
   if (loading) return <Loading />;
   if (error) return <ErrorBox message={error} />;
@@ -79,9 +80,15 @@ export default function Groups() {
               onPatch={patch}
               onReset={reset}
               memoriesOpen={openMemories === g.group_id}
-              onToggleMemories={() =>
-                setOpenMemories(openMemories === g.group_id ? null : g.group_id)
-              }
+              onToggleMemories={() => {
+                setOpenHotMemes(null);
+                setOpenMemories(openMemories === g.group_id ? null : g.group_id);
+              }}
+              hotMemesOpen={openHotMemes === g.group_id}
+              onToggleHotMemes={() => {
+                setOpenMemories(null);
+                setOpenHotMemes(openHotMemes === g.group_id ? null : g.group_id);
+              }}
             />
           ))}
         </ul>
@@ -99,9 +106,15 @@ export default function Groups() {
                 onPatch={patch}
                 onReset={reset}
                 memoriesOpen={openMemories === g.group_id}
-                onToggleMemories={() =>
-                  setOpenMemories(openMemories === g.group_id ? null : g.group_id)
-                }
+                onToggleMemories={() => {
+                  setOpenHotMemes(null);
+                  setOpenMemories(openMemories === g.group_id ? null : g.group_id);
+                }}
+                hotMemesOpen={openHotMemes === g.group_id}
+                onToggleHotMemes={() => {
+                  setOpenMemories(null);
+                  setOpenHotMemes(openHotMemes === g.group_id ? null : g.group_id);
+                }}
               />
             ))}
           </ul>
@@ -171,12 +184,16 @@ function GroupRow({
   onReset,
   memoriesOpen,
   onToggleMemories,
+  hotMemesOpen,
+  onToggleHotMemes,
 }: {
   group: Group;
   onPatch: (g: Group, body: Record<string, unknown>, label: string) => Promise<void>;
   onReset: (g: Group) => Promise<void>;
   memoriesOpen: boolean;
   onToggleMemories: () => void;
+  hotMemesOpen: boolean;
+  onToggleHotMemes: () => void;
 }) {
   return (
     <li className="row wrap">
@@ -233,9 +250,17 @@ function GroupRow({
         aria-expanded={memoriesOpen}
         onClick={onToggleMemories}
       >
-        记忆
+        群聊记忆
+      </button>
+      <button
+        type="button"
+        aria-expanded={hotMemesOpen}
+        onClick={onToggleHotMemes}
+      >
+        热梗记忆
       </button>
       {memoriesOpen && <Memories groupId={group.group_id} />}
+      {hotMemesOpen && <HotMemes groupId={group.group_id} />}
     </li>
   );
 }
@@ -243,15 +268,16 @@ function GroupRow({
 function Memories({ groupId }: { groupId: string }) {
   const { data, error, loading, reload } = useFetch(() =>
     apiGet<{ memories: Memory[]; total: number }>(
-      `/groups/${groupId}/memories?limit=50`,
+      `/groups/${groupId}/memories?limit=100`,
     ),
   );
   if (loading) return <Loading />;
   if (error) return <ErrorBox message={error} />;
-  const memories = data!.memories;
+  const memories = data!.memories.filter((m) => !m.archived_at);
   return (
     <div className="memories">
-      {memories.length === 0 && <p className="muted">这个群还没有记忆。</p>}
+      <p className="muted">群聊记忆（共 {memories.length} 条活跃记忆，仅包含群友日常事实、偏好、事件与话题）</p>
+      {memories.length === 0 && <p className="muted">这个群还没有群聊记忆。</p>}
       <ul className="rows">
         {memories.map((m) => (
           <li key={m.memory_ref} className="row wrap">
@@ -261,10 +287,56 @@ function Memories({ groupId }: { groupId: string }) {
             <button
               type="button"
               onClick={() => {
-                if (window.confirm("删除这条记忆？")) {
+                if (window.confirm("删除这条群聊记忆？")) {
                   void apiSend(
                     "DELETE",
                     `/groups/${groupId}/memories/${encodeURIComponent(m.memory_ref)}`,
+                  ).then(reload);
+                }
+              }}
+            >
+              删除
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  trending_sync: "全网热搜",
+  heybox_sync: "小黑盒热榜",
+  heybox_lingo: "玩家黑话",
+};
+
+function HotMemes({ groupId }: { groupId: string }) {
+  const { data, error, loading, reload } = useFetch(() =>
+    apiGet<{ hot_memes: HotMeme[]; total: number }>(
+      `/groups/${groupId}/hot-memes?limit=100`,
+    ),
+  );
+  if (loading) return <Loading />;
+  if (error) return <ErrorBox message={error} />;
+  const hotMemes = data!.hot_memes;
+  return (
+    <div className="memories">
+      <p className="muted">热梗记忆（共 {data!.total} 条活跃热梗，独立存储在 hot_memes 表，不占用群聊记忆名额）</p>
+      {hotMemes.length === 0 && <p className="muted">当前暂无同步的热梗记忆。</p>}
+      <ul className="rows">
+        {hotMemes.map((hm) => (
+          <li key={hm.meme_ref} className="row wrap">
+            <span>
+              <span className="tag">{SOURCE_LABELS[hm.source] ?? hm.source}</span>{" "}
+              {hm.content}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm("删除这条热梗记忆？")) {
+                  void apiSend(
+                    "DELETE",
+                    `/groups/${groupId}/hot-memes/${encodeURIComponent(hm.meme_ref)}`,
                   ).then(reload);
                 }
               }}

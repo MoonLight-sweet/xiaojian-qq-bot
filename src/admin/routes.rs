@@ -102,6 +102,11 @@ fn shared_routes() -> Router<Arc<AdminState>> {
             "/groups/{group_id}/memories/{memory_ref}",
             delete(delete_memory).patch(patch_memory),
         )
+        .route("/groups/{group_id}/hot-memes", get(list_hot_memes))
+        .route(
+            "/groups/{group_id}/hot-memes/{meme_ref}",
+            delete(delete_hot_meme),
+        )
         .route(
             "/persona",
             get(get_persona).put(put_persona).delete(delete_persona),
@@ -376,6 +381,8 @@ pub fn route_paths() -> Vec<&'static str> {
         "/internal/v1/groups/{group_id}/state",
         "/internal/v1/groups/{group_id}/memories",
         "/internal/v1/groups/{group_id}/memories/{memory_ref}",
+        "/internal/v1/groups/{group_id}/hot-memes",
+        "/internal/v1/groups/{group_id}/hot-memes/{meme_ref}",
         "/internal/v1/persona",
         "/internal/v1/groups/{group_id}/memory/compaction",
         "/internal/v1/groups/{group_id}/session/reset",
@@ -395,7 +402,9 @@ mod settings;
 mod stickers;
 
 use self::groups::{get_state, list_groups, patch_group, put_state};
-use self::memories::{create_memory, delete_memory, list_memories, patch_memory};
+use self::memories::{
+    create_memory, delete_hot_meme, delete_memory, list_hot_memes, list_memories, patch_memory,
+};
 use self::ops::{
     compaction_status, pending_overview, reset_session, retry_outbox, start_compaction,
 };
