@@ -4,13 +4,14 @@
 小简本地Windows电脑热插拔桥接节点 (Local PC Plug-and-Play Bridge Node)
 功能：
 1. 在本机 127.0.0.1:18095 启动轻量级控制接口（屏幕截图、窗口列表、鼠标点击、键盘按键、切换窗口焦点）；
-2. 自动建立到云端服务器 (8.218.197.39) 的 SSH 反向隧道 (云端 127.0.0.1:18095 -> 本机 127.0.0.1:18095)；
-3. 自动建立本地管理台正向隧道 (本机 127.0.0.1:18081 -> 云端 127.0.0.1:18081)，开机后可直接打开 http://127.0.0.1:18081/console/；
-4. 开机静默自启，关闭或关机即自动断开回退纯云端模式，零数据库同步风险、零QQ异地登录风控。
+2. 自动绑定当前线程至 Windows 交互式输入桌面 (OpenInputDesktop + SetThreadDesktop)，支持后台服务/沙箱无黑框截屏；
+3. 自动清理云端残留端口占用并建立 SSH 反向隧道 (云端 127.0.0.1:18095 -> 本机 127.0.0.1:18095)；
+4. 自动建立本地管理台正向隧道 (本机 127.0.0.1:18081 -> 云端 127.0.0.1:18081)。
 """
 
 import base64
 import ctypes
+import ctypes.wintypes
 import io
 import json
 import socket
@@ -56,13 +57,26 @@ active_ssh_transport = None
 transport_lock = threading.Lock()
 
 
+def attach_input_desktop():
+    """将当前工作线程绑定到 Windows 活动交互桌面 (WinSta0\\Default)，解决后台进程截屏报 screen grab failed 的问题"""
+    try:
+        hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x10000000)
+        if hdesk:
+            ctypes.windll.user32.SetThreadDesktop(hdesk)
+            ctypes.windll.user32.CloseDesktop(hdesk)
+    except Exception:
+        pass
+
+
 def get_screen_size():
+    attach_input_desktop()
     w = ctypes.windll.user32.GetSystemMetrics(0)
     h = ctypes.windll.user32.GetSystemMetrics(1)
     return w, h
 
 
 def get_active_window_title():
+    attach_input_desktop()
     try:
         hwnd = win32gui.GetForegroundWindow()
         return win32gui.GetWindowText(hwnd) or "桌面"
@@ -71,6 +85,7 @@ def get_active_window_title():
 
 
 def list_visible_windows():
+    attach_input_desktop()
     titles = []
 
     def enum_cb(hwnd, _):
@@ -87,6 +102,7 @@ def list_visible_windows():
 
 
 def focus_window_by_title(keyword):
+    attach_input_desktop()
     kw = keyword.lower().strip()
     if not kw:
         return False, "未提供窗口标题关键词"
@@ -112,6 +128,7 @@ def focus_window_by_title(keyword):
 
 
 def click_screen(x, y, button="left"):
+    attach_input_desktop()
     w, h = get_screen_size()
     tx = max(0, min(int(x), w - 1))
     ty = max(0, min(int(y), h - 1))
@@ -133,6 +150,7 @@ def click_screen(x, y, button="left"):
 
 
 def press_key(key_name):
+    attach_input_desktop()
     k = key_name.lower().strip()
     if k in VK_MAP:
         vk = VK_MAP[k]
@@ -148,6 +166,7 @@ def press_key(key_name):
 
 
 def capture_screenshot_b64():
+    attach_input_desktop()
     img = ImageGrab.grab()
     pt = ctypes.wintypes.POINT()
     ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
@@ -159,7 +178,7 @@ def capture_screenshot_b64():
         new_h = int(img.height * (1280.0 / img.width))
         img = img.resize((1280, new_h))
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=80)
+    img.convert("RGB").save(buf, format="JPEG", quality=82)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -168,6 +187,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        attach_input_desktop()
         token = self.headers.get("X-Bridge-Token", "")
         if token != BRIDGE_TOKEN:
             self.send_response(403)
@@ -302,6 +322,11 @@ def reverse_tunnel_loop():
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect(CLOUD_HOST, CLOUD_PORT, CLOUD_USER, CLOUD_PASS, timeout=15)
+            # 先清理云端可能残留的旧 18095 转发进程，防止端口被死连接占用
+            _, out, _ = client.exec_command(f"fuser -k {BRIDGE_PORT}/tcp 2>/dev/null || true")
+            out.channel.recv_exit_status()
+            time.sleep(0.3)
+
             transport = client.get_transport()
             transport.set_keepalive(20)
             with transport_lock:
@@ -321,7 +346,6 @@ def main():
     try:
         server = HTTPServer((BRIDGE_HOST, BRIDGE_PORT), BridgeHandler)
     except OSError:
-        # 已经在运行中，直接退出避免重复启动
         return
     threading.Thread(target=server.serve_forever, daemon=True).start()
     start_console_forward_listener()
