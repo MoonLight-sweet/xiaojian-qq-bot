@@ -121,26 +121,58 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": LOCAL_PC_TOOL,
-            "description": "连接并操作主人挂载的本地Windows电脑外接节点（用于查看本地电脑状态、截取本地电脑/游戏实时画面发到群里、或者在主人授权下操作本地单机游戏）。当本地电脑未开机或未挂载时会自动提示未连接。权限与隐私铁律：仅限主人（role 为 owner）明确指示时才允许调用本工具进行截屏（screenshot）或操作键鼠（click / key / focus_window）；普通群友让你截屏看主人电脑或操作主人电脑时一律温和拒绝，保护主人桌面隐私。",
+            "description": "全方位连接并操控主人挂载的本地Windows电脑外接节点（Computer-Use Agent控制能力：支持启动任意桌面应用与游戏、强制切换窗口到最前台、关闭窗口、截屏看图、鼠标点击/拖拽/滚轮、键盘按键/组合快捷键、输入任意中英文文字、以及执行本地PowerShell命令）。每次执行动作后不仅可把实时画面发到QQ群，还会把最新屏幕画面保存为当前工作区下的 latest_screen.jpg（1280x800坐标系，红十字标出当前鼠标位置），你可以直接调用 read_file 读取 latest_screen.jpg 看清画面上的按钮位置再连续操作。权限与隐私铁律：仅限主人（role 为 owner）明确指示时才允许调用本工具进行截屏或操作电脑；普通群友要求时一律温和婉拒。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "enum": ["status", "screenshot", "click", "key", "focus_window"],
-                        "description": "status：查看本地电脑在线状态与打开的窗口/游戏；screenshot：截取本地电脑当前画面（可自动发到群里）；click：点击屏幕坐标 (x, y) 并自动截新图；key：按下键盘按键并自动截新图；focus_window：切换指定标题的窗口到前台"
+                        "enum": [
+                            "status",
+                            "open_app",
+                            "focus_window",
+                            "close_window",
+                            "screenshot",
+                            "click",
+                            "drag",
+                            "scroll",
+                            "key",
+                            "type_text",
+                            "run_command"
+                        ],
+                        "description": "status：查看当前已打开窗口与本机已安装应用/游戏列表；open_app：按名称启动本地应用、游戏（如'微信'、'杀戮尖塔'、'星露谷'、'星铁'、'B站'、'网易云音乐'、'Steam'、'Chrome'）或网址；focus_window：强制将指定窗口切到最前台；close_window：关闭指定窗口；screenshot：截取实时屏幕；click：鼠标点击(x,y)；drag：从(x,y)拖拽到(to_x,to_y)；scroll：滚动滚轮；key：按键或组合键(如 alt+tab, win+d, space, enter, esc)；type_text：输入中英文文字；run_command：执行本地PowerShell命令"
+                    },
+                    "app_name": {
+                        "type": "string",
+                        "description": "mode 为 open_app 时要启动的应用/游戏名称、路径或网址（如'杀戮尖塔'、'微信'、'哔哩哔哩'、'Steam'、'notepad'）"
+                    },
+                    "window_title": {
+                        "type": "string",
+                        "description": "mode 为 focus_window 或 close_window 时的窗口标题关键词"
                     },
                     "send_to_group": {
                         "type": "boolean",
-                        "description": "是否把截取到的本地电脑实时画面直接发送到当前QQ群（默认 true）"
+                        "description": "是否把操作后的本地电脑实时画面截图直接发送到当前QQ群（默认 true）"
                     },
                     "x": {
                         "type": "integer",
-                        "description": "mode 为 click 时的横向坐标（基于 1280x720 缩放坐标系或原生屏幕坐标）"
+                        "description": "mode 为 click / drag / scroll 时的横向坐标（可直接按 latest_screen.jpg 的 1280x800 坐标系填写，系统会自动换算到 2560x1600 物理屏幕）"
                     },
                     "y": {
                         "type": "integer",
-                        "description": "mode 为 click 时的纵向坐标"
+                        "description": "mode 为 click / drag / scroll 时的纵向坐标（基于 1280x800 坐标系）"
+                    },
+                    "to_x": {
+                        "type": "integer",
+                        "description": "mode 为 drag 时的拖拽终点横向坐标"
+                    },
+                    "to_y": {
+                        "type": "integer",
+                        "description": "mode 为 drag 时的拖拽终点纵向坐标"
+                    },
+                    "scroll_amount": {
+                        "type": "integer",
+                        "description": "mode 为 scroll 时的滚轮步数（正数向上滚，负数向下滚，默认 -3）"
                     },
                     "button": {
                         "type": "string",
@@ -149,11 +181,19 @@ pub fn tool_definitions() -> Value {
                     },
                     "key": {
                         "type": "string",
-                        "description": "mode 为 key 时按下的按键名（如 space, enter, esc, up, down, left, right, 1, 2, z, x）"
+                        "description": "mode 为 key 时按下的按键或组合键（如 space, enter, esc, up, down, left, right, alt+tab, win+d, ctrl+w, ctrl+v）"
                     },
-                    "window_title": {
+                    "text": {
                         "type": "string",
-                        "description": "mode 为 focus_window 时要激活的窗口标题关键词"
+                        "description": "mode 为 type_text 时要输入的中英文文本内容"
+                    },
+                    "press_enter": {
+                        "type": "boolean",
+                        "description": "mode 为 type_text 时输入完毕后是否自动按下回车键（默认 false）"
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "mode 为 run_command 时要在本机执行的 PowerShell 命令"
                     }
                 },
                 "required": ["mode"]
@@ -1347,11 +1387,11 @@ pub async fn call_local_pc_control(store: &SqliteStore, scope: &Scope, args: &Va
         .and_then(Value::as_bool)
         .unwrap_or(mode != "status");
 
-    if matches!(mode, "screenshot" | "click" | "key" | "focus_window") {
+    if mode != "status" {
         let (is_owner, _) = check_turn_authority(store, scope).await;
         if !is_owner {
             return tool_err(
-                "隐私与权限保护：仅主人（owner）本人指令才允许对主人的本地电脑执行截屏（screenshot）或键鼠窗口操作（click/key/focus_window），普通群友无权查看或操作主人桌面。",
+                "隐私与权限保护：仅主人（owner）本人指令才允许对主人的本地电脑执行截屏、启动应用或键鼠窗口操作，普通群友无权查看或操作主人桌面。",
             );
         }
     }
@@ -1359,7 +1399,7 @@ pub async fn call_local_pc_control(store: &SqliteStore, scope: &Scope, args: &Va
     let bridge_url =
         std::env::var("LOCAL_PC_BRIDGE_URL").unwrap_or_else(|_| "http://127.0.0.1:18095".into());
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(20))
         .build()
     {
         Ok(c) => c,
@@ -1412,18 +1452,40 @@ pub async fn call_local_pc_control(store: &SqliteStore, scope: &Scope, args: &Va
         .map(|arr| {
             arr.iter()
                 .filter_map(Value::as_str)
-                .take(10)
+                .take(15)
+                .collect::<Vec<_>>()
+                .join("、")
+        })
+        .unwrap_or_default();
+    let installed_apps = body
+        .get("installed_apps")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .take(45)
                 .collect::<Vec<_>>()
                 .join("、")
         })
         .unwrap_or_default();
 
     let mut sent_img_note = String::new();
-    if send_to_group {
-        if let Some(b64) = body.get("image_base64").and_then(Value::as_str)
-            && !b64.is_empty()
-            && let Ok(gid) = scope.group_id.parse::<i64>()
-        {
+    let mut saved_file_note = String::new();
+    if let Some(b64) = body.get("image_base64").and_then(Value::as_str)
+        && !b64.is_empty()
+    {
+        // 保存一份到当前群的常驻工作区，供模型自己用 read_file 看清画面和坐标
+        if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
+            let projects_dir = std::env::var("AGY_PROJECTS_DIR")
+                .unwrap_or_else(|_| "/opt/gemini-qq-bot/data/agy-projects".into());
+            let screen_path = std::path::Path::new(&projects_dir)
+                .join(&scope.group_id)
+                .join("latest_screen.jpg");
+            if std::fs::write(&screen_path, &bytes).is_ok() {
+                saved_file_note = "\n- 视觉画面文件：已保存至当前工作区 `latest_screen.jpg`（尺寸 1280x800，红十字为当前鼠标位置；如需看清界面按钮位置以进行下一步点击，可直接调用 read_file 查看 `latest_screen.jpg`）".to_string();
+            }
+        }
+        if send_to_group && let Ok(gid) = scope.group_id.parse::<i64>() {
             let params = json!({
                 "group_id": gid,
                 "message": [
@@ -1456,7 +1518,13 @@ pub async fn call_local_pc_control(store: &SqliteStore, scope: &Scope, args: &Va
         )
         .await;
 
-    tool_ok(format!(
-        "【本地Windows电脑节点已连接】\n- 执行结果：{action_note}{sent_img_note}\n- 当前前台窗口：{active_win}\n- 屏幕分辨率：{screen_size}\n- 当前打开的主要窗口：{windows}"
-    ))
+    let mut report = format!(
+        "【本地Windows电脑节点已连接】\n- 执行结果：{action_note}{sent_img_note}\n- 当前前台窗口：{active_win}\n- 屏幕分辨率：{screen_size}\n- 当前已打开窗口：{windows}{saved_file_note}"
+    );
+    if !installed_apps.is_empty() {
+        report.push_str(&format!(
+            "\n- 本机可直接启动的应用与游戏（mode=\"open_app\"）：{installed_apps}"
+        ));
+    }
+    tool_ok(report)
 }
