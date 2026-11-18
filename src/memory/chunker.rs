@@ -173,8 +173,10 @@ pub fn render_fold_prompt(messages: &[GroupMessageRecord], aliases: &[(String, S
          person MUST carry that person's alias as subject — if you cannot tell \
          who it is about, drop the item instead of guessing, and never write the \
          placeholder \"member\" in content; refer to people by their alias.\n\
-         Skip jokes, hyperbole, memes and one-off banter: a claim the group is \
-         laughing at is not a fact, even when phrased like one. Skip the \
+         Skip jokes, hyperbole, memes, irony, roleplay, copy-paste repetition and \
+         one-off banter: a claim the group is laughing at or repeating as a meme \
+         is not a fact, even when phrased like one. Distinguish 'someone said X' \
+         from 'X is objectively true'. Skip the \
          assistant's own persona, catchphrases and settings — that is \
          configuration, not a group fact.\n\
          At most 6 items. Use an empty array when nothing qualifies.\n\

@@ -6,8 +6,8 @@ use sqlx::Row;
 use crate::error::BotResult;
 
 use crate::store::{
-    CompactionJob, GroupMessageRecord, HotMemeRecord, MemoryChunkRecord, MemoryRecord,
-    OutboxRecord, PendingEventRow, StickerRecord,
+    CompactionJob, GroupMessageRecord, HotMemeRecord, MemberProfileRecord, MemoryChunkRecord,
+    MemoryRecord, OutboxRecord, PendingEventRow, PinnedMemoryRecord, StickerRecord,
 };
 
 pub(super) fn map_pending(r: sqlx::sqlite::SqliteRow) -> PendingEventRow {
@@ -111,6 +111,32 @@ pub(super) fn map_hot_meme(r: sqlx::sqlite::SqliteRow) -> HotMemeRecord {
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
         archived_at: r.get("archived_at"),
+    }
+}
+
+pub(super) fn map_pinned_memory(r: sqlx::sqlite::SqliteRow) -> PinnedMemoryRecord {
+    PinnedMemoryRecord {
+        pin_ref: r.get("pin_ref"),
+        bot_id: r.get("bot_id"),
+        group_id: r.get("group_id"),
+        content: r.get("content"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    }
+}
+
+pub(super) fn map_member_profile(r: sqlx::sqlite::SqliteRow) -> MemberProfileRecord {
+    MemberProfileRecord {
+        bot_id: r.get("bot_id"),
+        group_id: r.get("group_id"),
+        user_id: r.get("user_id"),
+        display_name: r.get("display_name"),
+        identity_tags: r.get("identity_tags"),
+        interests: r.get("interests"),
+        personality_notes: r.get("personality_notes"),
+        recent_status: r.get("recent_status"),
+        source_msg_id: r.get("source_msg_id"),
+        updated_at: r.get("updated_at"),
     }
 }
 

@@ -164,6 +164,8 @@ pub struct PromptBatch {
     pub now_line: Option<String>,
     /// 本地梗百科命中参考（来自 memes 知识库，dsh-memewiki 架构）。命中时单条注入，未命中为 None。
     pub meme_wiki_context: Option<String>,
+    /// 认知记忆上下文（第一层置顶备忘录 + 第二层本轮发言群友四段式侧写档案）。
+    pub cognitive_context: Option<String>,
 }
 
 /// Timezone the clock is rendered in: Asia/Shanghai is UTC+8 all year, so a fixed
@@ -323,6 +325,14 @@ pub fn render(batch: &PromptBatch) -> String {
             "答其中某条时，把它的 pN 填进那一段的 quote_ref；本轮的 m 编号是另一批消息，别混。\n",
         );
         out.push_str(annex.trim());
+        out.push_str("\n\n");
+    }
+
+    if let Some(cog) = &batch.cognitive_context
+        && !cog.trim().is_empty()
+    {
+        out.push_str("# 认知记忆（置顶备忘与本轮发言群友侧写）\n");
+        out.push_str(cog.trim());
         out.push_str("\n\n");
     }
 

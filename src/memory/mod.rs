@@ -8,6 +8,7 @@ pub mod digest;
 pub mod extract;
 pub mod handover;
 pub mod memewiki;
+pub mod profiles;
 pub mod retrieval;
 pub mod stickers;
 

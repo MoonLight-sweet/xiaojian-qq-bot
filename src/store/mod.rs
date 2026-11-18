@@ -180,6 +180,41 @@ pub struct HotMemeRecord {
     pub archived_at: Option<i64>,
 }
 
+/// First layer of cognitive memory: pinned reminder / constraint (`pinned_memories`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedMemoryRecord {
+    pub pin_ref: String,
+    pub bot_id: String,
+    pub group_id: String,
+    pub content: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Second layer of cognitive memory: 4-section structured member profile (`member_profiles`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemberProfileRecord {
+    pub bot_id: String,
+    pub group_id: String,
+    pub user_id: String,
+    pub display_name: String,
+    pub identity_tags: String,
+    pub interests: String,
+    pub personality_notes: String,
+    pub recent_status: String,
+    pub source_msg_id: i64,
+    pub updated_at: i64,
+}
+
+impl MemberProfileRecord {
+    pub fn has_content(&self) -> bool {
+        !self.identity_tags.trim().is_empty()
+            || !self.interests.trim().is_empty()
+            || !self.personality_notes.trim().is_empty()
+            || !self.recent_status.trim().is_empty()
+    }
+}
+
 /// One row of the raw group log. Never deleted by the bot: archiving only flips a
 /// flag, so a bad summary can always be recomputed from the source.
 #[derive(Debug, Clone, Serialize, Deserialize)]

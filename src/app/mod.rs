@@ -735,6 +735,31 @@ impl App {
                             crate::now_unix(),
                         )
                         .await;
+                    // Background Historian pass (69gg/Undefined cognitive memory):
+                    // refresh up to 2 active speakers' 4-section profiles per cycle.
+                    let updated_profiles = crate::memory::profiles::refresh_member_profiles(
+                        &chunk_self.store,
+                        &chunk_self.config.bot_id,
+                        &group.group_id,
+                        &model,
+                        crate::now_unix(),
+                    )
+                    .await;
+                    if updated_profiles > 0 {
+                        let _ = chunk_self
+                            .store
+                            .audit(
+                                crate::store::origin::audit_actor(crate::store::origin::HY3),
+                                &format!(
+                                    "memory.profiles.updated.g{}.n{updated_profiles}",
+                                    group.group_id
+                                ),
+                                Some(&chunk_self.config.bot_id),
+                                Some(&group.group_id),
+                                crate::now_unix(),
+                            )
+                            .await;
+                    }
                 }
             }
         });

@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { apiGet, apiSend, type Group, type HotMeme, type Memory } from "../api";
+import {
+  apiGet,
+  apiSend,
+  type Group,
+  type HotMeme,
+  type MemberProfile,
+  type Memory,
+  type PinnedMemory,
+} from "../api";
 import { ErrorBox, Loading, Notice, unixTime, useFetch } from "../ui";
 
 const PACES = [
@@ -8,6 +16,8 @@ const PACES = [
   { value: "normal", label: "正常" },
   { value: "lively", label: "活跃" },
 ] as const;
+
+type PanelKind = "profiles" | "pins" | "memories" | "hot_memes";
 
 interface GroupsResponse {
   groups: Group[];
@@ -18,15 +28,14 @@ export default function Groups() {
     apiGet<GroupsResponse>("/groups"),
   );
   const [notice, setNotice] = useState<string | null>(null);
-  const [openMemories, setOpenMemories] = useState<string | null>(null);
-  const [openHotMemes, setOpenHotMemes] = useState<string | null>(null);
+  const [openPanel, setOpenPanel] = useState<{
+    groupId: string;
+    kind: PanelKind;
+  } | null>(null);
 
   if (loading) return <Loading />;
   if (error) return <ErrorBox message={error} />;
   const groups = data!.groups;
-  // A discovered group starts disabled with no conversation and no turns;
-  // a group an operator switched off has run before. That is the only
-  // signal separating "pending enable" from "disabled".
   const neverRan = (g: Group) => !g.has_conversation && g.agy_turn_count === 0;
   const pending = groups.filter((g) => !g.enabled && !g.departed_at && neverRan(g));
   const departed = groups.filter((g) => g.departed_at);
@@ -50,6 +59,14 @@ export default function Groups() {
       await reload();
     } catch {
       setNotice("会话重置失败");
+    }
+  }
+
+  function togglePanel(groupId: string, kind: PanelKind) {
+    if (openPanel?.groupId === groupId && openPanel.kind === kind) {
+      setOpenPanel(null);
+    } else {
+      setOpenPanel({ groupId, kind });
     }
   }
 
@@ -79,16 +96,8 @@ export default function Groups() {
               group={g}
               onPatch={patch}
               onReset={reset}
-              memoriesOpen={openMemories === g.group_id}
-              onToggleMemories={() => {
-                setOpenHotMemes(null);
-                setOpenMemories(openMemories === g.group_id ? null : g.group_id);
-              }}
-              hotMemesOpen={openHotMemes === g.group_id}
-              onToggleHotMemes={() => {
-                setOpenMemories(null);
-                setOpenHotMemes(openHotMemes === g.group_id ? null : g.group_id);
-              }}
+              activePanel={openPanel?.groupId === g.group_id ? openPanel.kind : null}
+              onTogglePanel={(kind) => togglePanel(g.group_id, kind)}
             />
           ))}
         </ul>
@@ -105,16 +114,8 @@ export default function Groups() {
                 group={g}
                 onPatch={patch}
                 onReset={reset}
-                memoriesOpen={openMemories === g.group_id}
-                onToggleMemories={() => {
-                  setOpenHotMemes(null);
-                  setOpenMemories(openMemories === g.group_id ? null : g.group_id);
-                }}
-                hotMemesOpen={openHotMemes === g.group_id}
-                onToggleHotMemes={() => {
-                  setOpenMemories(null);
-                  setOpenHotMemes(openHotMemes === g.group_id ? null : g.group_id);
-                }}
+                activePanel={openPanel?.groupId === g.group_id ? openPanel.kind : null}
+                onTogglePanel={(kind) => togglePanel(g.group_id, kind)}
               />
             ))}
           </ul>
@@ -182,18 +183,14 @@ function GroupRow({
   group,
   onPatch,
   onReset,
-  memoriesOpen,
-  onToggleMemories,
-  hotMemesOpen,
-  onToggleHotMemes,
+  activePanel,
+  onTogglePanel,
 }: {
   group: Group;
   onPatch: (g: Group, body: Record<string, unknown>, label: string) => Promise<void>;
   onReset: (g: Group) => Promise<void>;
-  memoriesOpen: boolean;
-  onToggleMemories: () => void;
-  hotMemesOpen: boolean;
-  onToggleHotMemes: () => void;
+  activePanel: PanelKind | null;
+  onTogglePanel: (kind: PanelKind) => void;
 }) {
   return (
     <li className="row wrap">
@@ -247,21 +244,227 @@ function GroupRow({
       </button>
       <button
         type="button"
-        aria-expanded={memoriesOpen}
-        onClick={onToggleMemories}
+        aria-expanded={activePanel === "profiles"}
+        onClick={() => onTogglePanel("profiles")}
+      >
+        人物侧写
+      </button>
+      <button
+        type="button"
+        aria-expanded={activePanel === "pins"}
+        onClick={() => onTogglePanel("pins")}
+      >
+        置顶备忘
+      </button>
+      <button
+        type="button"
+        aria-expanded={activePanel === "memories"}
+        onClick={() => onTogglePanel("memories")}
       >
         群聊记忆
       </button>
       <button
         type="button"
-        aria-expanded={hotMemesOpen}
-        onClick={onToggleHotMemes}
+        aria-expanded={activePanel === "hot_memes"}
+        onClick={() => onTogglePanel("hot_memes")}
       >
         热梗记忆
       </button>
-      {memoriesOpen && <Memories groupId={group.group_id} />}
-      {hotMemesOpen && <HotMemes groupId={group.group_id} />}
+      {activePanel === "profiles" && <Profiles groupId={group.group_id} />}
+      {activePanel === "pins" && <Pins groupId={group.group_id} />}
+      {activePanel === "memories" && <Memories groupId={group.group_id} />}
+      {activePanel === "hot_memes" && <HotMemes groupId={group.group_id} />}
     </li>
+  );
+}
+
+function Profiles({ groupId }: { groupId: string }) {
+  const { data, error, loading, reload } = useFetch(() =>
+    apiGet<{ profiles: MemberProfile[] }>(`/groups/${groupId}/profiles`),
+  );
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    display_name: "",
+    identity_tags: "",
+    interests: "",
+    personality_notes: "",
+    recent_status: "",
+  });
+
+  if (loading) return <Loading />;
+  if (error) return <ErrorBox message={error} />;
+  const profiles = data!.profiles;
+
+  function startEdit(p: MemberProfile) {
+    setEditingId(p.user_id);
+    setForm({
+      display_name: p.display_name,
+      identity_tags: p.identity_tags,
+      interests: p.interests,
+      personality_notes: p.personality_notes,
+      recent_status: p.recent_status,
+    });
+  }
+
+  async function saveEdit(userId: string) {
+    await apiSend("PUT", `/groups/${groupId}/profiles/${encodeURIComponent(userId)}`, form);
+    setEditingId(null);
+    await reload();
+  }
+
+  return (
+    <div className="memories">
+      <p className="muted">
+        群友四段式结构化侧写档案（共 {profiles.length} 人，发言时 1ms 直取注入，后台史官每 10 分钟自动精炼合并）
+      </p>
+      {profiles.length === 0 && <p className="muted">当前暂无群友侧写档案。</p>}
+      <ul className="rows">
+        {profiles.map((p) => (
+          <li key={p.user_id} className="row wrap">
+            {editingId === p.user_id ? (
+              <div style={{ width: "100%", display: "grid", gap: "6px" }}>
+                <strong>
+                  编辑侧写：{p.display_name || p.user_id}（{p.speaker_ref ?? "未分配"}）
+                </strong>
+                <label>
+                  称呼：
+                  <input
+                    value={form.display_name}
+                    onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+                  />
+                </label>
+                <label>
+                  身份标签：
+                  <input
+                    value={form.identity_tags}
+                    onChange={(e) => setForm({ ...form, identity_tags: e.target.value })}
+                  />
+                </label>
+                <label>
+                  喜好与常聊：
+                  <input
+                    value={form.interests}
+                    onChange={(e) => setForm({ ...form, interests: e.target.value })}
+                  />
+                </label>
+                <label>
+                  性格与印象：
+                  <input
+                    value={form.personality_notes}
+                    onChange={(e) => setForm({ ...form, personality_notes: e.target.value })}
+                  />
+                </label>
+                <label>
+                  近期动态：
+                  <input
+                    value={form.recent_status}
+                    onChange={(e) => setForm({ ...form, recent_status: e.target.value })}
+                  />
+                </label>
+                <div>
+                  <button type="button" onClick={() => void saveEdit(p.user_id)}>
+                    保存
+                  </button>{" "}
+                  <button type="button" onClick={() => setEditingId(null)}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <span>
+                  <span className="tag">{p.speaker_ref ?? "群友"}</span>{" "}
+                  <strong>{p.display_name || p.user_id}</strong>
+                  <span className="muted">（QQ: {p.user_id}）</span>
+                  <br />
+                  <small>
+                    身份：{p.identity_tags || "暂无"} ｜ 喜好：{p.interests || "暂无"} ｜ 性格印象：
+                    {p.personality_notes || "暂无"} ｜ 近期动态：{p.recent_status || "暂无"}
+                  </small>
+                </span>
+                <span>
+                  <button type="button" onClick={() => startEdit(p)}>
+                    编辑
+                  </button>{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm("删除该群友的侧写档案？")) {
+                        void apiSend(
+                          "DELETE",
+                          `/groups/${groupId}/profiles/${encodeURIComponent(p.user_id)}`,
+                        ).then(reload);
+                      }
+                    }}
+                  >
+                    删除
+                  </button>
+                </span>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function Pins({ groupId }: { groupId: string }) {
+  const { data, error, loading, reload } = useFetch(() =>
+    apiGet<{ pins: PinnedMemory[] }>(`/groups/${groupId}/pins`),
+  );
+  const [newPin, setNewPin] = useState("");
+
+  if (loading) return <Loading />;
+  if (error) return <ErrorBox message={error} />;
+  const pins = data!.pins;
+
+  async function addPin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newPin.trim()) return;
+    await apiSend("POST", `/groups/${groupId}/pins`, { content: newPin.trim() });
+    setNewPin("");
+    await reload();
+  }
+
+  return (
+    <div className="memories">
+      <p className="muted">
+        置顶备忘录（共 {pins.length} 条，每轮对话固定置顶注入，用于存放主人的长期交代与永久自我约束）
+      </p>
+      <form onSubmit={(e) => void addPin(e)} className="row" style={{ marginBottom: "8px" }}>
+        <input
+          placeholder="新增置顶备忘（例如：群友考试周期间多给温和鼓励）"
+          value={newPin}
+          onChange={(e) => setNewPin(e.target.value)}
+          style={{ flex: 1 }}
+        />
+        <button type="submit">添加置顶</button>
+      </form>
+      {pins.length === 0 && <p className="muted">暂无置顶备忘录。</p>}
+      <ul className="rows">
+        {pins.map((pin) => (
+          <li key={pin.pin_ref} className="row wrap">
+            <span>
+              <span className="tag">置顶</span> {pin.content}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm("删除这条置顶备忘？")) {
+                  void apiSend(
+                    "DELETE",
+                    `/groups/${groupId}/pins/${encodeURIComponent(pin.pin_ref)}`,
+                  ).then(reload);
+                }
+              }}
+            >
+              删除
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -276,7 +479,9 @@ function Memories({ groupId }: { groupId: string }) {
   const memories = data!.memories.filter((m) => !m.archived_at);
   return (
     <div className="memories">
-      <p className="muted">群聊记忆（共 {memories.length} 条活跃记忆，仅包含群友日常事实、偏好、事件与话题）</p>
+      <p className="muted">
+        群聊记忆（共 {memories.length} 条活跃记忆，仅包含群友日常事实、偏好、事件与话题）
+      </p>
       {memories.length === 0 && <p className="muted">这个群还没有群聊记忆。</p>}
       <ul className="rows">
         {memories.map((m) => (
@@ -321,7 +526,9 @@ function HotMemes({ groupId }: { groupId: string }) {
   const hotMemes = data!.hot_memes;
   return (
     <div className="memories">
-      <p className="muted">热梗记忆（共 {data!.total} 条活跃热梗，独立存储在 hot_memes 表，不占用群聊记忆名额）</p>
+      <p className="muted">
+        热梗记忆（共 {data!.total} 条活跃热梗，独立存储在 hot_memes 表，不占用群聊记忆名额）
+      </p>
       {hotMemes.length === 0 && <p className="muted">当前暂无同步的热梗记忆。</p>}
       <ul className="rows">
         {hotMemes.map((hm) => (

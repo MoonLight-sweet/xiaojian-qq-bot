@@ -290,3 +290,207 @@ pub(super) async fn delete_hot_meme(
         .await;
     ok_json(json!({ "ok": true }))
 }
+
+/// List all pinned memories for a group.
+pub(super) async fn list_pins(
+    State(state): State<Arc<AdminState>>,
+    AxumPath(group_id): AxumPath<String>,
+) -> ApiResult {
+    let group_id = checked_group_id(&group_id)?;
+    let pins = state
+        .store
+        .list_pinned_memories(&state.bot_id, &group_id)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    ok_json(json!({
+        "group_id": group_id,
+        "pins": pins,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct NewPinRequest {
+    content: String,
+}
+
+/// Create a pinned memory entry.
+pub(super) async fn create_pin(
+    State(state): State<Arc<AdminState>>,
+    AxumPath(group_id): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    let group_id = checked_group_id(&group_id)?;
+    let input: NewPinRequest =
+        serde_json::from_value(body).map_err(|_| ApiError::bad_request("invalid_body"))?;
+    let content = input.content.trim();
+    if content.is_empty() || content.chars().count() > MAX_MEMORY_CONTENT_CHARS {
+        return Err(ApiError::bad_request("invalid_content"));
+    }
+    let now = crate::now_unix();
+    let pin_ref = state
+        .store
+        .insert_pinned_memory(&state.bot_id, &group_id, content, now)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let _ = state
+        .store
+        .audit(
+            ActorKind::Panel.as_str(),
+            "pin.create",
+            Some(&state.bot_id),
+            Some(&group_id),
+            now,
+        )
+        .await;
+    Ok((StatusCode::CREATED, Json(json!({ "pin_ref": pin_ref }))).into_response())
+}
+
+/// Delete a pinned memory entry.
+pub(super) async fn delete_pin(
+    State(state): State<Arc<AdminState>>,
+    AxumPath((group_id, pin_ref)): AxumPath<(String, String)>,
+) -> ApiResult {
+    let group_id = checked_group_id(&group_id)?;
+    let now = crate::now_unix();
+    let removed = state
+        .store
+        .delete_pinned_memory(&state.bot_id, &group_id, &pin_ref)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    if !removed {
+        return Err(ApiError::not_found("not_found"));
+    }
+    let _ = state
+        .store
+        .audit(
+            ActorKind::Panel.as_str(),
+            "pin.delete",
+            Some(&state.bot_id),
+            Some(&group_id),
+            now,
+        )
+        .await;
+    ok_json(json!({ "ok": true }))
+}
+
+/// List all member profiles for a group, enriched with their `speaker_ref` alias.
+pub(super) async fn list_profiles(
+    State(state): State<Arc<AdminState>>,
+    AxumPath(group_id): AxumPath<String>,
+) -> ApiResult {
+    let group_id = checked_group_id(&group_id)?;
+    let profiles = state
+        .store
+        .list_member_profiles(&state.bot_id, &group_id)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let members = state
+        .store
+        .list_members(&state.bot_id, &group_id)
+        .await
+        .unwrap_or_default();
+    let alias_for = |user_id: &str| {
+        members
+            .iter()
+            .find(|m| m.user_id == user_id)
+            .map(|m| m.speaker_ref.clone())
+    };
+    ok_json(json!({
+        "group_id": group_id,
+        "profiles": profiles
+            .into_iter()
+            .map(|p| json!({
+                "user_id": p.user_id,
+                "speaker_ref": alias_for(&p.user_id),
+                "display_name": p.display_name,
+                "identity_tags": p.identity_tags,
+                "interests": p.interests,
+                "personality_notes": p.personality_notes,
+                "recent_status": p.recent_status,
+                "updated_at": p.updated_at,
+            }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct PutProfileRequest {
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    identity_tags: String,
+    #[serde(default)]
+    interests: String,
+    #[serde(default)]
+    personality_notes: String,
+    #[serde(default)]
+    recent_status: String,
+}
+
+/// Operator edit or creation of a member's 4-section profile.
+pub(super) async fn put_profile(
+    State(state): State<Arc<AdminState>>,
+    AxumPath((group_id, user_id)): AxumPath<(String, String)>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    let group_id = checked_group_id(&group_id)?;
+    let user_id = checked_group_id(&user_id)?;
+    let input: PutProfileRequest =
+        serde_json::from_value(body).map_err(|_| ApiError::bad_request("invalid_body"))?;
+    let now = crate::now_unix();
+    state
+        .store
+        .upsert_member_profile(
+            &state.bot_id,
+            &group_id,
+            &user_id,
+            input.display_name.trim(),
+            input.identity_tags.trim(),
+            input.interests.trim(),
+            input.personality_notes.trim(),
+            input.recent_status.trim(),
+            0,
+            now,
+        )
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let _ = state
+        .store
+        .audit(
+            ActorKind::Panel.as_str(),
+            "profile.update",
+            Some(&state.bot_id),
+            Some(&group_id),
+            now,
+        )
+        .await;
+    ok_json(json!({ "ok": true }))
+}
+
+pub(super) async fn delete_profile(
+    State(state): State<Arc<AdminState>>,
+    AxumPath((group_id, user_id)): AxumPath<(String, String)>,
+) -> ApiResult {
+    let group_id = checked_group_id(&group_id)?;
+    let user_id = checked_group_id(&user_id)?;
+    let now = crate::now_unix();
+    let removed = state
+        .store
+        .delete_member_profile(&state.bot_id, &group_id, &user_id)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    if !removed {
+        return Err(ApiError::not_found("not_found"));
+    }
+    let _ = state
+        .store
+        .audit(
+            ActorKind::Panel.as_str(),
+            "profile.delete",
+            Some(&state.bot_id),
+            Some(&group_id),
+            now,
+        )
+        .await;
+    ok_json(json!({ "ok": true }))
+}

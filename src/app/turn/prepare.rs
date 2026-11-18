@@ -630,6 +630,29 @@ impl TurnExecutor {
             Some(meme_sections.join("\n"))
         };
 
+        // 认知记忆层（69gg/Undefined 架构）：1毫秒直取置顶备忘录 + 本轮发言群友四段式侧写档案
+        let pins = self
+            .store
+            .list_pinned_memories(&self.bot_id, &job.group_id)
+            .await
+            .unwrap_or_default();
+        let all_profiles = self
+            .store
+            .list_member_profiles(&self.bot_id, &job.group_id)
+            .await
+            .unwrap_or_default();
+        let mut seen_speakers: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut speaker_profiles: Vec<(String, crate::store::MemberProfileRecord)> = Vec::new();
+        for msg in &messages {
+            if seen_speakers.insert(msg.sender_id.clone()) {
+                if let Some(prof) = all_profiles.iter().find(|p| p.user_id == msg.sender_id) {
+                    speaker_profiles.push((msg.speaker_ref.clone(), prof.clone()));
+                }
+            }
+        }
+        prompt_batch.cognitive_context =
+            crate::memory::profiles::render_cognitive_context(&pins, &speaker_profiles);
+
         // An update still needs its key to survive validation, so every key the digest
         // exposed is accepted even if the digest's own pass picked it up through an
         // expansion term the batch text alone would not have surfaced.

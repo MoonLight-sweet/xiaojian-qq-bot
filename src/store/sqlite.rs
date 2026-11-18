@@ -9,9 +9,9 @@ use sqlx::{Row, SqlitePool};
 use crate::error::{BotError, BotResult};
 use crate::store::{
     AgentCall, ArmedTurn, AuditEvent, CallState, CompactionJob, GroupMessageRecord, GroupRecord,
-    GroupStateRecord, HandoverRecord, HotMemeRecord, JobState, MemberRecord, MemoryChunkRecord,
-    MemoryRecord, OutboxRecord, OutboxState, PendingEventRow, SeedQuarantine, StickerRecord,
-    SummaryRecord, TurnSubmission,
+    GroupStateRecord, HandoverRecord, HotMemeRecord, JobState, MemberProfileRecord, MemberRecord,
+    MemoryChunkRecord, MemoryRecord, OutboxRecord, OutboxState, PendingEventRow,
+    PinnedMemoryRecord, SeedQuarantine, StickerRecord, SummaryRecord, TurnSubmission,
 };
 
 /// Every sticker column in one place so the four read paths cannot drift apart.
@@ -37,8 +37,8 @@ mod stickers;
 mod submit;
 
 use self::maps::{
-    audit_memory, map_chunk, map_group_message, map_hot_meme, map_job, map_memory, map_outbox,
-    map_pending, map_sticker, uuid_like,
+    audit_memory, map_chunk, map_group_message, map_hot_meme, map_job, map_member_profile,
+    map_memory, map_outbox, map_pending, map_pinned_memory, map_sticker, uuid_like,
 };
 
 #[cfg(test)]

@@ -166,6 +166,24 @@ export interface HotMeme {
   updated_at: number;
 }
 
+export interface PinnedMemory {
+  pin_ref: string;
+  content: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MemberProfile {
+  user_id: string;
+  speaker_ref: string | null;
+  display_name: string;
+  identity_tags: string;
+  interests: string;
+  personality_notes: string;
+  recent_status: string;
+  updated_at: number;
+}
+
 export interface Sticker {
   hash: string;
   short: string;

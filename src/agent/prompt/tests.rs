@@ -39,6 +39,7 @@ fn batch() -> PromptBatch {
         turn_token: None,
         now_line: None,
         meme_wiki_context: None,
+        cognitive_context: None,
     }
 }
 

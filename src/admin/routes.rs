@@ -107,6 +107,13 @@ fn shared_routes() -> Router<Arc<AdminState>> {
             "/groups/{group_id}/hot-memes/{meme_ref}",
             delete(delete_hot_meme),
         )
+        .route("/groups/{group_id}/pins", get(list_pins).post(create_pin))
+        .route("/groups/{group_id}/pins/{pin_ref}", delete(delete_pin))
+        .route("/groups/{group_id}/profiles", get(list_profiles))
+        .route(
+            "/groups/{group_id}/profiles/{user_id}",
+            axum::routing::put(put_profile).delete(delete_profile),
+        )
         .route(
             "/persona",
             get(get_persona).put(put_persona).delete(delete_persona),
@@ -383,6 +390,10 @@ pub fn route_paths() -> Vec<&'static str> {
         "/internal/v1/groups/{group_id}/memories/{memory_ref}",
         "/internal/v1/groups/{group_id}/hot-memes",
         "/internal/v1/groups/{group_id}/hot-memes/{meme_ref}",
+        "/internal/v1/groups/{group_id}/pins",
+        "/internal/v1/groups/{group_id}/pins/{pin_ref}",
+        "/internal/v1/groups/{group_id}/profiles",
+        "/internal/v1/groups/{group_id}/profiles/{user_id}",
         "/internal/v1/persona",
         "/internal/v1/groups/{group_id}/memory/compaction",
         "/internal/v1/groups/{group_id}/session/reset",
@@ -403,7 +414,8 @@ mod stickers;
 
 use self::groups::{get_state, list_groups, patch_group, put_state};
 use self::memories::{
-    create_memory, delete_hot_meme, delete_memory, list_hot_memes, list_memories, patch_memory,
+    create_memory, create_pin, delete_hot_meme, delete_memory, delete_pin, delete_profile,
+    list_hot_memes, list_memories, list_pins, list_profiles, patch_memory, put_profile,
 };
 use self::ops::{
     compaction_status, pending_overview, reset_session, retry_outbox, start_compaction,

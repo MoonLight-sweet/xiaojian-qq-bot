@@ -150,6 +150,167 @@ impl SqliteStore {
         Ok(res.rows_affected() > 0)
     }
 
+    /// List all pinned memories for a group, newest first.
+    pub async fn list_pinned_memories(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+    ) -> BotResult<Vec<PinnedMemoryRecord>> {
+        let rows = sqlx::query(
+            "SELECT pin_ref, bot_id, group_id, content, created_at, updated_at
+             FROM pinned_memories WHERE bot_id = ? AND group_id = ?
+             ORDER BY updated_at DESC, pin_ref DESC",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(map_pinned_memory).collect())
+    }
+
+    /// Insert a new pinned memory entry.
+    pub async fn insert_pinned_memory(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+        content: &str,
+        now: i64,
+    ) -> BotResult<String> {
+        let pin_ref = format!("pin_{}", uuid_like());
+        sqlx::query(
+            "INSERT INTO pinned_memories (pin_ref, bot_id, group_id, content, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&pin_ref)
+        .bind(bot_id)
+        .bind(group_id)
+        .bind(content)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(pin_ref)
+    }
+
+    /// Delete a pinned memory entry.
+    pub async fn delete_pinned_memory(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+        pin_ref: &str,
+    ) -> BotResult<bool> {
+        let res = sqlx::query(
+            "DELETE FROM pinned_memories WHERE bot_id = ? AND group_id = ? AND pin_ref = ?",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .bind(pin_ref)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// List all member profiles in a group, ordered by most recently updated.
+    pub async fn list_member_profiles(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+    ) -> BotResult<Vec<MemberProfileRecord>> {
+        let rows = sqlx::query(
+            "SELECT bot_id, group_id, user_id, display_name, identity_tags,
+                    interests, personality_notes, recent_status, source_msg_id, updated_at
+             FROM member_profiles WHERE bot_id = ? AND group_id = ?
+             ORDER BY updated_at DESC, user_id ASC",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(map_member_profile).collect())
+    }
+
+    /// Fetch one member's profile by `user_id`.
+    pub async fn get_member_profile(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+        user_id: &str,
+    ) -> BotResult<Option<MemberProfileRecord>> {
+        let row = sqlx::query(
+            "SELECT bot_id, group_id, user_id, display_name, identity_tags,
+                    interests, personality_notes, recent_status, source_msg_id, updated_at
+             FROM member_profiles WHERE bot_id = ? AND group_id = ? AND user_id = ?",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(map_member_profile))
+    }
+
+    /// Upsert a member's 4-section profile record.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_member_profile(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+        user_id: &str,
+        display_name: &str,
+        identity_tags: &str,
+        interests: &str,
+        personality_notes: &str,
+        recent_status: &str,
+        source_msg_id: i64,
+        now: i64,
+    ) -> BotResult<()> {
+        sqlx::query(
+            "INSERT INTO member_profiles (
+                bot_id, group_id, user_id, display_name, identity_tags,
+                interests, personality_notes, recent_status, source_msg_id, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(bot_id, group_id, user_id) DO UPDATE SET
+                display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE member_profiles.display_name END,
+                identity_tags = excluded.identity_tags,
+                interests = excluded.interests,
+                personality_notes = excluded.personality_notes,
+                recent_status = excluded.recent_status,
+                source_msg_id = CASE WHEN excluded.source_msg_id > member_profiles.source_msg_id THEN excluded.source_msg_id ELSE member_profiles.source_msg_id END,
+                updated_at = excluded.updated_at",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .bind(user_id)
+        .bind(display_name)
+        .bind(identity_tags)
+        .bind(interests)
+        .bind(personality_notes)
+        .bind(recent_status)
+        .bind(source_msg_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Delete one member's profile record.
+    pub async fn delete_member_profile(
+        &self,
+        bot_id: &str,
+        group_id: &str,
+        user_id: &str,
+    ) -> BotResult<bool> {
+        let res = sqlx::query(
+            "DELETE FROM member_profiles WHERE bot_id = ? AND group_id = ? AND user_id = ?",
+        )
+        .bind(bot_id)
+        .bind(group_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Total sticker rows matching the `kept` filter, so the panel can page them.
     pub async fn count_stickers(&self, bot_id: &str, kept: Option<i64>) -> BotResult<i64> {
         let count: i64 = sqlx::query_scalar(
