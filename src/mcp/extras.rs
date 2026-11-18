@@ -121,7 +121,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": LOCAL_PC_TOOL,
-            "description": "连接并操作主人挂载的本地Windows电脑外接节点（用于查看本地电脑状态、截取本地电脑/游戏实时画面发到群里、或者在主人授权下操作本地单机游戏）。当本地电脑未开机或未挂载时会自动提示未连接。权限规则：status 和 screenshot 模式所有群友均可触发；click / key / focus_window 等键鼠操作仅限主人（role 为 owner）明确指示时可用。",
+            "description": "连接并操作主人挂载的本地Windows电脑外接节点（用于查看本地电脑状态、截取本地电脑/游戏实时画面发到群里、或者在主人授权下操作本地单机游戏）。当本地电脑未开机或未挂载时会自动提示未连接。权限与隐私铁律：仅限主人（role 为 owner）明确指示时才允许调用本工具进行截屏（screenshot）或操作键鼠（click / key / focus_window）；普通群友让你截屏看主人电脑或操作主人电脑时一律温和拒绝，保护主人桌面隐私。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1347,11 +1347,11 @@ pub async fn call_local_pc_control(store: &SqliteStore, scope: &Scope, args: &Va
         .and_then(Value::as_bool)
         .unwrap_or(mode != "status");
 
-    if matches!(mode, "click" | "key" | "focus_window") {
-        let (is_owner, is_proactive) = check_turn_authority(store, scope).await;
-        if !is_owner && !is_proactive {
+    if matches!(mode, "screenshot" | "click" | "key" | "focus_window") {
+        let (is_owner, _) = check_turn_authority(store, scope).await;
+        if !is_owner {
             return tool_err(
-                "权限不足：仅主人（owner）可指令操作本地电脑的鼠标与键盘；普通群友可使用 mode=\"status\" 或 mode=\"screenshot\" 查看画面。",
+                "隐私与权限保护：仅主人（owner）本人指令才允许对主人的本地电脑执行截屏（screenshot）或键鼠窗口操作（click/key/focus_window），普通群友无权查看或操作主人桌面。",
             );
         }
     }

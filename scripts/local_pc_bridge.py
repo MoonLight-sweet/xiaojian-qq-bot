@@ -5,7 +5,8 @@
 功能：
 1. 在本机 127.0.0.1:18095 启动轻量级控制接口（屏幕截图、窗口列表、鼠标点击、键盘按键、切换窗口焦点）；
 2. 自动建立到云端服务器 (8.218.197.39) 的 SSH 反向隧道 (云端 127.0.0.1:18095 -> 本机 127.0.0.1:18095)；
-3. 开机运行即挂载为云端小简的本地游戏/屏幕外接节点，关闭窗口或关机即自动断开回退纯云端模式，零数据库同步风险、零QQ异地登录风控。
+3. 自动建立本地管理台正向隧道 (本机 127.0.0.1:18081 -> 云端 127.0.0.1:18081)，开机后可直接打开 http://127.0.0.1:18081/console/；
+4. 开机静默自启，关闭或关机即自动断开回退纯云端模式，零数据库同步风险、零QQ异地登录风控。
 """
 
 import base64
@@ -29,6 +30,7 @@ except Exception:
 
 BRIDGE_HOST = "127.0.0.1"
 BRIDGE_PORT = 18095
+CONSOLE_PORT = 18081
 BRIDGE_TOKEN = "xiaojian-local-pc-bridge-2026"
 
 CLOUD_HOST = "8.218.197.39"
@@ -49,6 +51,9 @@ VK_MAP = {
     "right": 0x27,
     "down": 0x28,
 }
+
+active_ssh_transport = None
+transport_lock = threading.Lock()
 
 
 def get_screen_size():
@@ -108,7 +113,6 @@ def focus_window_by_title(keyword):
 
 def click_screen(x, y, button="left"):
     w, h = get_screen_size()
-    # 如果传入的是基于 1280x720 的坐标且本机分辨率更高，保持原坐标点击
     tx = max(0, min(int(x), w - 1))
     ty = max(0, min(int(y), h - 1))
     ctypes.windll.user32.SetCursorPos(tx, ty)
@@ -145,7 +149,6 @@ def press_key(key_name):
 
 def capture_screenshot_b64():
     img = ImageGrab.grab()
-    # 标出当前鼠标位置
     pt = ctypes.wintypes.POINT()
     ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
     draw = ImageDraw.Draw(img)
@@ -265,15 +268,44 @@ def handle_reverse_channel(chan):
             pass
 
 
+def start_console_forward_listener():
+    """本地 127.0.0.1:18081 -> 云端 127.0.0.1:18081 正向隧道（管理台开机直达）"""
+    try:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", CONSOLE_PORT))
+        srv.listen(32)
+    except Exception:
+        return
+
+    def accept_loop():
+        while True:
+            try:
+                client_sock, addr = srv.accept()
+                with transport_lock:
+                    tr = active_ssh_transport
+                if tr is None or not tr.is_active():
+                    client_sock.close()
+                    continue
+                chan = tr.open_channel("direct-tcpip", ("127.0.0.1", CONSOLE_PORT), addr)
+                pipe_sockets(chan, client_sock)
+            except Exception:
+                time.sleep(0.2)
+
+    threading.Thread(target=accept_loop, daemon=True).start()
+
+
 def reverse_tunnel_loop():
+    global active_ssh_transport
     while True:
         try:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect(CLOUD_HOST, CLOUD_PORT, CLOUD_USER, CLOUD_PASS, timeout=15)
-            # 清理云端可能残留的旧 18095 转发占用
             transport = client.get_transport()
             transport.set_keepalive(20)
+            with transport_lock:
+                active_ssh_transport = transport
             transport.request_port_forward("127.0.0.1", BRIDGE_PORT)
             print(f"[BRIDGE] 已成功挂载至云端小简 (云端 127.0.0.1:{BRIDGE_PORT} -> 本机 {BRIDGE_HOST}:{BRIDGE_PORT})")
             while transport.is_active():
@@ -286,8 +318,13 @@ def reverse_tunnel_loop():
 
 
 def main():
-    server = HTTPServer((BRIDGE_HOST, BRIDGE_PORT), BridgeHandler)
+    try:
+        server = HTTPServer((BRIDGE_HOST, BRIDGE_PORT), BridgeHandler)
+    except OSError:
+        # 已经在运行中，直接退出避免重复启动
+        return
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    start_console_forward_listener()
     print(f"[BRIDGE] 本地电脑控制服务已启动于 http://{BRIDGE_HOST}:{BRIDGE_PORT}")
     reverse_tunnel_loop()
 
