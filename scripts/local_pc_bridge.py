@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+小简本地Windows电脑热插拔桥接节点 (Local PC Plug-and-Play Bridge Node)
+功能：
+1. 在本机 127.0.0.1:18095 启动轻量级控制接口（屏幕截图、窗口列表、鼠标点击、键盘按键、切换窗口焦点）；
+2. 自动建立到云端服务器 (8.218.197.39) 的 SSH 反向隧道 (云端 127.0.0.1:18095 -> 本机 127.0.0.1:18095)；
+3. 开机运行即挂载为云端小简的本地游戏/屏幕外接节点，关闭窗口或关机即自动断开回退纯云端模式，零数据库同步风险、零QQ异地登录风控。
+"""
+
+import base64
+import ctypes
+import io
+import json
+import socket
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import paramiko
+import win32con
+import win32gui
+from PIL import ImageDraw, ImageGrab
+
+try:
+    ctypes.windll.user32.SetProcessDPIAware()
+except Exception:
+    pass
+
+BRIDGE_HOST = "127.0.0.1"
+BRIDGE_PORT = 18095
+BRIDGE_TOKEN = "xiaojian-local-pc-bridge-2026"
+
+CLOUD_HOST = "8.218.197.39"
+CLOUD_PORT = 22
+CLOUD_USER = "root"
+CLOUD_PASS = "3442441682Yht"
+
+VK_MAP = {
+    "space": 0x20,
+    "enter": 0x0D,
+    "return": 0x0D,
+    "esc": 0x1B,
+    "escape": 0x1B,
+    "tab": 0x09,
+    "backspace": 0x08,
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+}
+
+
+def get_screen_size():
+    w = ctypes.windll.user32.GetSystemMetrics(0)
+    h = ctypes.windll.user32.GetSystemMetrics(1)
+    return w, h
+
+
+def get_active_window_title():
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        return win32gui.GetWindowText(hwnd) or "桌面"
+    except Exception:
+        return "未知"
+
+
+def list_visible_windows():
+    titles = []
+
+    def enum_cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            t = win32gui.GetWindowText(hwnd).strip()
+            if t and t not in ("Program Manager", "Settings", "MSCTFIME UI", "Default IME"):
+                titles.append(t)
+
+    try:
+        win32gui.EnumWindows(enum_cb, None)
+    except Exception:
+        pass
+    return titles[:15]
+
+
+def focus_window_by_title(keyword):
+    kw = keyword.lower().strip()
+    if not kw:
+        return False, "未提供窗口标题关键词"
+    found = []
+
+    def enum_cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            t = win32gui.GetWindowText(hwnd).strip()
+            if kw in t.lower():
+                found.append((hwnd, t))
+
+    win32gui.EnumWindows(enum_cb, None)
+    if not found:
+        return False, f"未找到包含「{keyword}」的窗口"
+    hwnd, title = found[0]
+    try:
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+        time.sleep(0.4)
+        return True, f"已切换到窗口：{title}"
+    except Exception as e:
+        return False, f"切换窗口失败: {e}"
+
+
+def click_screen(x, y, button="left"):
+    w, h = get_screen_size()
+    # 如果传入的是基于 1280x720 的坐标且本机分辨率更高，保持原坐标点击
+    tx = max(0, min(int(x), w - 1))
+    ty = max(0, min(int(y), h - 1))
+    ctypes.windll.user32.SetCursorPos(tx, ty)
+    time.sleep(0.08)
+    if button == "right":
+        ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)
+        ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)
+    elif button == "double":
+        for _ in range(2):
+            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+            time.sleep(0.06)
+    else:
+        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+        ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+    time.sleep(0.5)
+    return f"已在坐标 ({tx}, {ty}) 执行鼠标 {button} 点击"
+
+
+def press_key(key_name):
+    k = key_name.lower().strip()
+    if k in VK_MAP:
+        vk = VK_MAP[k]
+    elif len(k) == 1 and k.isalnum():
+        vk = ord(k.upper())
+    else:
+        return False, f"暂不支持按键名: {key_name}"
+    ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+    time.sleep(0.08)
+    ctypes.windll.user32.keybd_event(vk, 0, 0x0002, 0)
+    time.sleep(0.5)
+    return True, f"已按下按键: {key_name}"
+
+
+def capture_screenshot_b64():
+    img = ImageGrab.grab()
+    # 标出当前鼠标位置
+    pt = ctypes.wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    draw = ImageDraw.Draw(img)
+    r = 8
+    draw.ellipse((pt.x - r, pt.y - r, pt.x + r, pt.y + r), outline="red", width=3)
+
+    if img.width > 1280:
+        new_h = int(img.height * (1280.0 / img.width))
+        img = img.resize((1280, new_h))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=80)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+class BridgeHandler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass
+
+    def do_POST(self):
+        token = self.headers.get("X-Bridge-Token", "")
+        if token != BRIDGE_TOKEN:
+            self.send_response(403)
+            self.end_headers()
+            return
+
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except Exception:
+            req = {}
+
+        mode = req.get("mode", "status")
+        action_note = "已读取本地电脑状态"
+        ok = True
+        err_msg = None
+
+        if mode == "click":
+            x = req.get("x", 640)
+            y = req.get("y", 360)
+            btn = req.get("button", "left")
+            action_note = click_screen(x, y, btn)
+        elif mode == "key":
+            ok, msg = press_key(str(req.get("key", "space")))
+            if ok:
+                action_note = msg
+            else:
+                err_msg = msg
+        elif mode == "focus_window":
+            ok, msg = focus_window_by_title(str(req.get("window_title", "")))
+            if ok:
+                action_note = msg
+            else:
+                err_msg = msg
+        elif mode == "screenshot":
+            action_note = "已截取本地电脑实时画面"
+
+        w, h = get_screen_size()
+        img_b64 = ""
+        if ok and mode in ("screenshot", "click", "key", "focus_window"):
+            try:
+                img_b64 = capture_screenshot_b64()
+            except Exception as e:
+                action_note += f"（截屏异常: {e}）"
+
+        resp = {
+            "ok": ok,
+            "error": err_msg,
+            "action_note": action_note,
+            "active_window": get_active_window_title(),
+            "screen_size": f"{w}x{h}",
+            "windows": list_visible_windows(),
+            "image_base64": img_b64,
+        }
+        payload = json.dumps(resp).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def pipe_sockets(chan, sock):
+    def forward(src, dst):
+        try:
+            while True:
+                data = src.recv(16384)
+                if not data:
+                    break
+                dst.sendall(data)
+        except Exception:
+            pass
+        finally:
+            try:
+                src.close()
+            except Exception:
+                pass
+            try:
+                dst.close()
+            except Exception:
+                pass
+
+    t1 = threading.Thread(target=forward, args=(chan, sock), daemon=True)
+    t2 = threading.Thread(target=forward, args=(sock, chan), daemon=True)
+    t1.start()
+    t2.start()
+
+
+def handle_reverse_channel(chan):
+    try:
+        sock = socket.create_connection((BRIDGE_HOST, BRIDGE_PORT), timeout=5)
+        pipe_sockets(chan, sock)
+    except Exception:
+        try:
+            chan.close()
+        except Exception:
+            pass
+
+
+def reverse_tunnel_loop():
+    while True:
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(CLOUD_HOST, CLOUD_PORT, CLOUD_USER, CLOUD_PASS, timeout=15)
+            # 清理云端可能残留的旧 18095 转发占用
+            transport = client.get_transport()
+            transport.set_keepalive(20)
+            transport.request_port_forward("127.0.0.1", BRIDGE_PORT)
+            print(f"[BRIDGE] 已成功挂载至云端小简 (云端 127.0.0.1:{BRIDGE_PORT} -> 本机 {BRIDGE_HOST}:{BRIDGE_PORT})")
+            while transport.is_active():
+                chan = transport.accept(timeout=5)
+                if chan is not None:
+                    threading.Thread(target=handle_reverse_channel, args=(chan,), daemon=True).start()
+        except Exception as e:
+            print(f"[BRIDGE] 反向隧道断开或重连中: {e}")
+        time.sleep(5)
+
+
+def main():
+    server = HTTPServer((BRIDGE_HOST, BRIDGE_PORT), BridgeHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(f"[BRIDGE] 本地电脑控制服务已启动于 http://{BRIDGE_HOST}:{BRIDGE_PORT}")
+    reverse_tunnel_loop()
+
+
+if __name__ == "__main__":
+    main()

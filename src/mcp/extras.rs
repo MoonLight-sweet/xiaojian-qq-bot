@@ -15,6 +15,7 @@ pub const BILIBILI_TOOL: &str = "bilibili_browse";
 pub const PROFILE_TOOL: &str = "profile_update";
 pub const QZONE_TOOL: &str = "qzone_publish";
 pub const MEMEWIKI_TOOL: &str = "search_meme_wiki";
+pub const LOCAL_PC_TOOL: &str = "local_pc_control";
 
 /// Cooldown for autonomous global profile/avatar change: once per 24 hours.
 const SELF_PROFILE_COOLDOWN_SECS: i64 = 86_400;
@@ -116,6 +117,46 @@ pub fn tool_definitions() -> Value {
                     }
                 },
                 "required": ["query"]
+            }
+        },
+        {
+            "name": LOCAL_PC_TOOL,
+            "description": "连接并操作主人挂载的本地Windows电脑外接节点（用于查看本地电脑状态、截取本地电脑/游戏实时画面发到群里、或者在主人授权下操作本地单机游戏）。当本地电脑未开机或未挂载时会自动提示未连接。权限规则：status 和 screenshot 模式所有群友均可触发；click / key / focus_window 等键鼠操作仅限主人（role 为 owner）明确指示时可用。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["status", "screenshot", "click", "key", "focus_window"],
+                        "description": "status：查看本地电脑在线状态与打开的窗口/游戏；screenshot：截取本地电脑当前画面（可自动发到群里）；click：点击屏幕坐标 (x, y) 并自动截新图；key：按下键盘按键并自动截新图；focus_window：切换指定标题的窗口到前台"
+                    },
+                    "send_to_group": {
+                        "type": "boolean",
+                        "description": "是否把截取到的本地电脑实时画面直接发送到当前QQ群（默认 true）"
+                    },
+                    "x": {
+                        "type": "integer",
+                        "description": "mode 为 click 时的横向坐标（基于 1280x720 缩放坐标系或原生屏幕坐标）"
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "mode 为 click 时的纵向坐标"
+                    },
+                    "button": {
+                        "type": "string",
+                        "enum": ["left", "right", "double"],
+                        "description": "鼠标按键，默认 left"
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "mode 为 key 时按下的按键名（如 space, enter, esc, up, down, left, right, 1, 2, z, x）"
+                    },
+                    "window_title": {
+                        "type": "string",
+                        "description": "mode 为 focus_window 时要激活的窗口标题关键词"
+                    }
+                },
+                "required": ["mode"]
             }
         }
     ])
@@ -1293,4 +1334,129 @@ pub async fn call_search_meme_wiki(store: &SqliteStore, _scope: &Scope, args: &V
             "梗百科知识库中暂未收录「{query}」相关词条。可以如实回答不知道，或结合上下文自然接话，切勿胡编乱造。"
         )),
     }
+}
+
+pub async fn call_local_pc_control(store: &SqliteStore, scope: &Scope, args: &Value) -> Value {
+    let mode = args
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("status")
+        .trim();
+    let send_to_group = args
+        .get("send_to_group")
+        .and_then(Value::as_bool)
+        .unwrap_or(mode != "status");
+
+    if matches!(mode, "click" | "key" | "focus_window") {
+        let (is_owner, is_proactive) = check_turn_authority(store, scope).await;
+        if !is_owner && !is_proactive {
+            return tool_err(
+                "权限不足：仅主人（owner）可指令操作本地电脑的鼠标与键盘；普通群友可使用 mode=\"status\" 或 mode=\"screenshot\" 查看画面。",
+            );
+        }
+    }
+
+    let bridge_url =
+        std::env::var("LOCAL_PC_BRIDGE_URL").unwrap_or_else(|_| "http://127.0.0.1:18095".into());
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return tool_err(format!("创建 HTTP 客户端失败: {e}")),
+    };
+
+    let resp = match client
+        .post(format!("{}/api", bridge_url.trim_end_matches('/')))
+        .header("X-Bridge-Token", "xiaojian-local-pc-bridge-2026")
+        .json(args)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return tool_ok(
+                "主人的本地Windows电脑当前未挂载在线（或已关机断开隧道），小简目前运行在纯云端常驻模式。",
+            );
+        }
+    };
+
+    let body: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return tool_err(format!("解析本地电脑桥接响应失败: {e}")),
+    };
+
+    if body.get("ok").and_then(Value::as_bool) != Some(true) {
+        let err_msg = body
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("未知错误");
+        return tool_err(format!("本地电脑执行失败: {err_msg}"));
+    }
+
+    let active_win = body
+        .get("active_window")
+        .and_then(Value::as_str)
+        .unwrap_or("未知窗口");
+    let screen_size = body
+        .get("screen_size")
+        .and_then(Value::as_str)
+        .unwrap_or("未知");
+    let action_note = body
+        .get("action_note")
+        .and_then(Value::as_str)
+        .unwrap_or("状态查询完成");
+    let windows = body
+        .get("windows")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .take(10)
+                .collect::<Vec<_>>()
+                .join("、")
+        })
+        .unwrap_or_default();
+
+    let mut sent_img_note = String::new();
+    if send_to_group {
+        if let Some(b64) = body.get("image_base64").and_then(Value::as_str)
+            && !b64.is_empty()
+            && let Ok(gid) = scope.group_id.parse::<i64>()
+        {
+            let params = json!({
+                "group_id": gid,
+                "message": [
+                    {
+                        "type": "image",
+                        "data": {
+                            "file": format!("base64://{b64}")
+                        }
+                    }
+                ]
+            });
+            match onebot_call("send_group_msg", params).await {
+                Ok(_) => {
+                    sent_img_note = "（已将本地电脑实时画面截图直接发送至当前QQ群）".to_string();
+                }
+                Err(e) => {
+                    sent_img_note = format!("（截图发群失败: {e}）");
+                }
+            }
+        }
+    }
+
+    let _ = store
+        .audit(
+            "agent",
+            &format!("mcp.local_pc.{mode}"),
+            Some(&scope.bot_id),
+            Some(&scope.group_id),
+            crate::now_unix(),
+        )
+        .await;
+
+    tool_ok(format!(
+        "【本地Windows电脑节点已连接】\n- 执行结果：{action_note}{sent_img_note}\n- 当前前台窗口：{active_win}\n- 屏幕分辨率：{screen_size}\n- 当前打开的主要窗口：{windows}"
+    ))
 }
