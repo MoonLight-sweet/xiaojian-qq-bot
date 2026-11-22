@@ -654,14 +654,22 @@ def get_sts2_live_report():
                 else:
                     deck_strs.append(f"{cname}x{cnt}")
 
-            # 统计遗物与药水
+            # 统计遗物、海克斯符文(HextechRunes)与药水
             relic_strs = []
+            hextech_strs = []
             for r in p0.get("relics", []):
                 rid = (r.get("id", "") if isinstance(r, dict) else str(r)).replace("RELIC.", "")
                 rinfo = db.get("relics", {}).get(rid, {})
                 rname = rinfo.get("title", rid)
                 rdesc = rinfo.get("desc", "")
-                relic_strs.append(f"{rname}({rdesc[:32]})" if rdesc else rname)
+                rmod = rinfo.get("mod", "")
+                item_text = f"{rname}({rdesc[:36]})" if rdesc else rname
+                if rmod in ("HextechRunes", "HextechRunesSponsorPack") or any(
+                    w in rid.upper() for w in ("RUNE", "HEX", "FORGE")
+                ):
+                    hextech_strs.append(item_text)
+                else:
+                    relic_strs.append(item_text)
 
             potion_strs = []
             for pot in p0.get("potions", []):
@@ -675,6 +683,8 @@ def get_sts2_live_report():
             lines.append(
                 f"- 当前实时存档：角色={active_char_cn}({char_id}) | 进阶={asc} | 第{act_idx}幕-已走{floor_num}层 | 生命={cur_hp}/{max_hp} | 金币={gold}"
             )
+            if hextech_strs:
+                lines.append(f"- 当前激活的海克斯符文/锻造器({len(hextech_strs)})：{'；'.join(hextech_strs)}")
             lines.append(f"- 当前遗物({len(relic_strs)})：{'；'.join(relic_strs) if relic_strs else '无'}")
             if potion_strs:
                 lines.append(f"- 当前药水：{'；'.join(potion_strs)}")
@@ -719,6 +729,9 @@ def get_sts2_live_report():
         except Exception:
             pass
 
+    lines.append(
+        "- 工坊模组提示：已启用【海克斯大乱斗+拓展包】（每幕开局必选1个海克斯符文，每个槽位可重随2次，点击卡片即直接生效；火堆支持『添柴』删牌；奖励支持『锻体』选属性锻造器）、【快速SL按钮】（战斗陷入绝境时可按 Esc 打开暂停菜单点击『快速SL』重打当前房间1次）、【皮肤切换器】（自定义立绘下请以中文文字和后台ID为准，勿仅凭长相猜怪）。"
+    )
     lines.append(
         "- 快捷键提示：手牌对应数字键 1-9（无目标牌按数字键后点屏幕中央 640,400；指向攻击牌按数字键后点目标怪物身体）；按 E 键结束回合；按 M 键看地图。建议优先用 mode=\"sts2_batch\" 一次性下达整回合动作！"
     )
