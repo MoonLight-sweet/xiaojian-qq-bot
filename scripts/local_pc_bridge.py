@@ -249,12 +249,15 @@ def force_bring_to_front(hwnd):
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     try:
+        fg_hwnd = user32.GetForegroundWindow()
+        if fg_hwnd == hwnd and not win32gui.IsIconic(hwnd):
+            return False
+
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         else:
             win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
 
-        fg_hwnd = user32.GetForegroundWindow()
         fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None)
         cur_tid = kernel32.GetCurrentThreadId()
 
@@ -288,8 +291,9 @@ def force_bring_to_front(hwnd):
 
         if fg_tid != cur_tid and fg_tid != 0:
             user32.AttachThreadInput(cur_tid, fg_tid, False)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def focus_window_by_title(keyword):
@@ -310,8 +314,8 @@ def focus_window_by_title(keyword):
     if not found:
         return False, f"未找到包含「{keyword}」的已打开窗口，可尝试使用 mode=\"open_app\" 启动它"
     hwnd, title = found[0]
-    force_bring_to_front(hwnd)
-    time.sleep(0.5)
+    if force_bring_to_front(hwnd):
+        time.sleep(0.15)
     return True, f"已强制将窗口「{title}」切换至最前台"
 
 
@@ -417,7 +421,7 @@ def click_screen(x, y, button="left"):
     else:
         ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
         ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
-    time.sleep(0.5)
+    time.sleep(0.15)
     return f"已在物理坐标 ({tx}, {ty}) 执行鼠标 {button} 点击"
 
 
@@ -481,8 +485,8 @@ def press_key_or_hotkey(key_expr):
     time.sleep(0.06)
     for vk in reversed(vks):
         ctypes.windll.user32.keybd_event(vk, 0, 0x0002, 0)
-        time.sleep(0.04)
-    time.sleep(0.5)
+        time.sleep(0.03)
+    time.sleep(0.15)
     return True, f"已按下按键/组合键: {key_expr}"
 
 
@@ -873,12 +877,12 @@ def execute_sts2_batch(steps, wait_after_ms=2200):
             )
             executed.append(f"步{idx}[拖拽]: {msg}")
         elif stype == "wait":
-            ms = max(100, min(int(st.get("ms", 800)), 5000))
+            ms = max(100, min(int(st.get("ms", 600)), 3000))
             time.sleep(ms / 1000.0)
             executed.append(f"步{idx}[等待 {ms}ms]")
-        time.sleep(0.32)
+        time.sleep(0.12)
 
-    wait_s = max(0.3, min(float(wait_after_ms or 2200) / 1000.0, 6.0))
+    wait_s = max(0.3, min(float(wait_after_ms or 1000) / 1000.0, 3.0))
     time.sleep(wait_s)
     summary = "已连贯执行《杀戮尖塔2》批量操作：\n" + "\n".join(executed) + "\n\n" + get_sts2_live_report()
     return True, summary
@@ -1386,18 +1390,24 @@ class BridgeHandler(BaseHTTPRequestHandler):
             "image_base64": img_b64,
         }
         payload = json.dumps(resp).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(payload)
+            self.wfile.flush()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+            pass
 
 
 def pipe_sockets(chan, sock):
-    def forward(src, dst):
+    """双向管道转发：使用写半关闭(shutdown_write)防止一侧读完EOF时提前把另一侧正在回传的HTTP响应掐断"""
+    def forward(src, dst, is_dst_chan):
         try:
             while True:
-                data = src.recv(16384)
+                data = src.recv(32768)
                 if not data:
                     break
                 dst.sendall(data)
@@ -1405,23 +1415,36 @@ def pipe_sockets(chan, sock):
             pass
         finally:
             try:
-                src.close()
-            except Exception:
-                pass
-            try:
-                dst.close()
+                if is_dst_chan:
+                    dst.shutdown_write()
+                else:
+                    dst.shutdown(socket.SHUT_WR)
             except Exception:
                 pass
 
-    t1 = threading.Thread(target=forward, args=(chan, sock), daemon=True)
-    t2 = threading.Thread(target=forward, args=(sock, chan), daemon=True)
-    t1.start()
-    t2.start()
+    def supervisor():
+        t1 = threading.Thread(target=forward, args=(chan, sock, False), daemon=True)
+        t2 = threading.Thread(target=forward, args=(sock, chan, True), daemon=True)
+        t1.start()
+        t2.start()
+        t1.join(timeout=60)
+        t2.join(timeout=60)
+        try:
+            sock.close()
+        except Exception:
+            pass
+        try:
+            chan.close()
+        except Exception:
+            pass
+
+    threading.Thread(target=supervisor, daemon=True).start()
 
 
 def handle_reverse_channel(chan):
     try:
-        sock = socket.create_connection((BRIDGE_HOST, BRIDGE_PORT), timeout=5)
+        sock = socket.create_connection((BRIDGE_HOST, BRIDGE_PORT), timeout=8)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         pipe_sockets(chan, sock)
     except Exception:
         try:
@@ -1444,6 +1467,7 @@ def start_console_forward_listener():
         while True:
             try:
                 client_sock, addr = srv.accept()
+                client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 with transport_lock:
                     tr = active_ssh_transport
                 if tr is None or not tr.is_active():
@@ -1461,26 +1485,43 @@ def reverse_tunnel_loop():
     global active_ssh_transport
     while True:
         try:
+            # 创建带 Windows 原生 TCP KeepAlive 与 TCP_NODELAY 的底层直连 Socket，防止被代理或 NAT 掐断
+            raw_sock = socket.create_connection((CLOUD_HOST, CLOUD_PORT), timeout=15)
+            raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if hasattr(raw_sock, "ioctl") and hasattr(socket, "SIO_KEEPALIVE_VALS"):
+                # (开启=1, 10秒空闲发心跳=10000ms, 每3秒重试=3000ms)
+                raw_sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 10000, 3000))
+
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(CLOUD_HOST, CLOUD_PORT, CLOUD_USER, CLOUD_PASS, timeout=15)
+            client.connect(
+                CLOUD_HOST,
+                CLOUD_PORT,
+                CLOUD_USER,
+                CLOUD_PASS,
+                timeout=15,
+                banner_timeout=20,
+                auth_timeout=15,
+                sock=raw_sock,
+            )
             _, out, _ = client.exec_command(f"fuser -k {BRIDGE_PORT}/tcp 2>/dev/null || true")
             out.channel.recv_exit_status()
-            time.sleep(0.3)
+            time.sleep(0.25)
 
             transport = client.get_transport()
-            transport.set_keepalive(20)
+            transport.set_keepalive(12)
             with transport_lock:
                 active_ssh_transport = transport
             transport.request_port_forward("127.0.0.1", BRIDGE_PORT)
-            print(f"[BRIDGE] 已成功挂载至云端小简 (云端 127.0.0.1:{BRIDGE_PORT} -> 本机 {BRIDGE_HOST}:{BRIDGE_PORT})")
+            print(f"[BRIDGE] 已成功挂载至云端小简 (云端 127.0.0.1:{BRIDGE_PORT} -> 本机 {BRIDGE_HOST}:{BRIDGE_PORT})", flush=True)
             while transport.is_active():
                 chan = transport.accept(timeout=5)
                 if chan is not None:
                     threading.Thread(target=handle_reverse_channel, args=(chan,), daemon=True).start()
         except Exception as e:
-            print(f"[BRIDGE] 反向隧道断开或重连中: {e}")
-        time.sleep(5)
+            print(f"[BRIDGE] 反向隧道断开或重连中: {e}", flush=True)
+        time.sleep(2)
 
 
 def main():
