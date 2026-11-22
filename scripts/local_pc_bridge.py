@@ -194,7 +194,39 @@ def scan_installed_shortcuts():
         os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
         r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs",
     ]
+    ignore_keywords = (
+        "卸载",
+        "uninstall",
+        "administrative tools",
+        "application verifier",
+        "component services",
+        "computer management",
+        "control panel",
+        "debuggable package",
+        "developer command",
+        "developer powershell",
+        "disk cleanup",
+        "documentation for",
+        "error reporter",
+        "ea updater",
+        "更新程序",
+        "event viewer",
+        "git faqs",
+        "git release notes",
+        "install additional tools",
+        "character map",
+    )
     shortcuts = {}
+    # 优先注入本机 Steam 游戏库已安装的核心游戏
+    steam_games = {
+        "杀戮尖塔2 (Slay the Spire 2)": r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe",
+        "Slay the Spire 2": r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe",
+        "杀戮尖塔1 (Slay the Spire)": r"D:\SteamLibrary\steamapps\common\SlayTheSpire\SlayTheSpire.exe",
+    }
+    for gname, gpath in steam_games.items():
+        if os.path.exists(gpath):
+            shortcuts[gname] = gpath
+
     for p in paths:
         if not os.path.exists(p):
             continue
@@ -202,7 +234,8 @@ def scan_installed_shortcuts():
             for f in files:
                 if f.lower().endswith((".lnk", ".url", ".exe", ".bat")):
                     name = os.path.splitext(f)[0]
-                    if "卸载" not in name and "uninstall" not in name.lower():
+                    low = name.lower()
+                    if not any(k in low for k in ignore_keywords):
                         shortcuts[name] = os.path.join(root, f)
     return shortcuts
 
@@ -872,7 +905,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
             req = {}
 
         mode = req.get("mode", "status")
-        action_note = "已读取本地电脑状态"
+        action_note = (
+            "已读取本地电脑状态（本机已安装《杀戮尖塔2 / Slay the Spire 2》，已锁定2号练习存档槽位并内置官方中文词典+海克斯大乱斗等6个工坊模组知识库；"
+            "可直接调用 mode=\"open_app\", app_name=\"杀戮尖塔2\" 启动，并用 mode=\"sts2_status\" / \"sts2_batch\" / \"sts2_review\" 游玩与复盘）"
+        )
         ok = True
         err_msg = None
 
@@ -975,7 +1011,28 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         installed_apps = []
         if mode == "status":
-            installed_apps = sorted(list(scan_installed_shortcuts().keys()))[:60]
+            all_keys = list(scan_installed_shortcuts().keys())
+            priority_words = (
+                "杀戮尖塔2",
+                "slay the spire 2",
+                "杀戮尖塔",
+                "slay the spire",
+                "星穹铁道",
+                "stardew",
+                "silksong",
+                "terraria",
+                "饥荒",
+                "暖雪",
+                "weixin",
+                "微信",
+                "哔哩哔哩",
+                "网易云",
+                "steam",
+                "chrome",
+            )
+            top_apps = [k for k in all_keys if any(w in k.lower() for w in priority_words)]
+            rest_apps = sorted([k for k in all_keys if k not in top_apps])
+            installed_apps = (top_apps + rest_apps)[:60]
 
         resp = {
             "ok": ok,
