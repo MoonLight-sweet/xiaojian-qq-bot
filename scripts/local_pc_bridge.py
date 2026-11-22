@@ -22,7 +22,7 @@ import socket
 import subprocess
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import paramiko
 import win32clipboard
@@ -540,17 +540,15 @@ def capture_screenshot_b64(draw_grid=True):
         mx, my = pt.x, pt.y
 
     draw = ImageDraw.Draw(img)
-    # 绘制 1280x800 视觉坐标辅助刻度网格，方便大模型 read_file 看图精准定位按钮坐标
+    # 绘制 1280x800 视觉坐标辅助刻度网格（使用整条细线避免 JPEG 高频噪点膨胀）
     if draw_grid:
         w, h = img.width, img.height
         for gx in range(100, w, 100):
-            for gy in range(0, h, 8):
-                draw.point((gx, gy), fill=(0, 220, 255))
+            draw.line((gx, 0, gx, h), fill=(0, 140, 170), width=1)
             draw.rectangle((gx - 14, 2, gx + 16, 15), fill=(0, 0, 0))
             draw.text((gx - 12, 3), str(gx), fill=(255, 240, 0))
         for gy in range(100, h, 100):
-            for gx in range(0, w, 8):
-                draw.point((gx, gy), fill=(0, 220, 255))
+            draw.line((0, gy, w, gy), fill=(0, 140, 170), width=1)
             draw.rectangle((2, gy - 7, 28, gy + 7), fill=(0, 0, 0))
             draw.text((4, gy - 6), str(gy), fill=(255, 240, 0))
         for gx in (200, 400, 640, 880, 1100):
@@ -567,7 +565,7 @@ def capture_screenshot_b64(draw_grid=True):
     draw.line((mx, my - 14, mx, my + 14), fill="red", width=2)
 
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=84)
+    img.convert("RGB").save(buf, format="JPEG", quality=72)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -1190,20 +1188,18 @@ def sts2_autoplay_daemon_loop():
                 stop_sts2_autoplay(f"已达到单次自动连续爬塔上限({AUTOPLAY_STATE['max_turns']}轮)")
                 continue
 
-            # 6. 置顶游戏窗口、截取带 1280x800 坐标网格的最新画面并推进下一回合
+            # 6. 置顶游戏窗口并推进下一回合（无需每一步都截图，直接传后台存档与日志数据）
             focus_window_by_title("Slay the Spire 2")
-            img_b64 = capture_screenshot_b64(draw_grid=True)
+            img_b64 = ""
             live_rep = get_sts2_live_report()
             next_turn = AUTOPLAY_STATE["turn"] + 1
-            should_broadcast = (next_turn == 1) or (next_turn % 4 == 0)
             turn_prompt = (
-                f"【《杀戮尖塔2》全自动连续爬塔推进 第{next_turn}/{AUTOPLAY_STATE['max_turns']}轮】\n"
-                f"最新带 1280x800 坐标刻度网格的实时画面已同步至工作区 `latest_screen.jpg`。\n"
+                f"【《杀戮尖塔2》全自动连续爬塔推进 第{next_turn}/{AUTOPLAY_STATE['max_turns']}轮（免截图极速模式）】\n"
                 f"{live_rep}\n"
-                f"请立即按顺序执行本回合操作：\n"
-                f"1. 必须先调用 read_file 查看 `latest_screen.jpg`，根据画面上的黄绿色坐标刻度看清当前界面（主菜单/角色选择/先古对话/海克斯符文三选一/地图节点/战斗出牌回合/战后领奖选牌/火堆/商店/事件/死亡结算）及要点击的精确(x,y)坐标；\n"
-                f"2. 调用 local_pc_control(mode=\"sts2_batch\", send_to_group={'true' if should_broadcast else 'false'}, steps=[...]) 一次性执行本回合整套动作（例如：战斗回合先算好总伤害与费用，用数字键1-9选牌配合click点击目标怪物(如x=920,y=420)或屏幕中央(x=640,y=400)，最后按 key=\"e\" 结束回合；若选牌/选海克斯后确定了流派，可顺带调 sts2_review 更新局内流派便签；若画面已是死亡/胜利结算界面，请调 sts2_review 写入死因复盘并调 sts2_autoplay_stop 停止循环）；\n"
-                f"3. 防刷屏要求：{'本轮是播报节点，请在群里用一两句话简短汇报当前打到第几层、血量与出牌/抓牌决策' if should_broadcast else '本轮是中间连续推进步，执行完 sts2_batch 后请直接在回复中选择静默(silent)不要往群里发文字，避免刷屏'}。"
+                f"请立即执行本回合操作：\n"
+                f"1. 不用每一步都截图！请优先根据上方后台实时存档（角色、血量、牌组、遗物、海克斯符文）和 godot.log 最新战斗日志，直接调用 local_pc_control(mode=\"sts2_batch\", send_to_group=false, steps=[...]) 一次性执行本回合整套动作（常用坐标：主菜单『单人模式』x=405,y=500；选人界面『铁甲战士』x=220,y=660、『储君』x=720,y=660、『亡灵契约师』x=600,y=660，右下角『启程/开始』x=1120,y=680；先古对话点击底部按钮x=640,y=620；海克斯符文三选一卡片分别在x=360,y=420 / x=640,y=420 / x=920,y=420；战斗中按数字键1-9选牌后点击目标怪物x=920,y=420或屏幕中央x=640,y=400，最后按 key=\"e\" 结束回合）；\n"
+                f"2. 仅当你根据日志完全无法判断当前停留在什么特殊弹窗/地图分叉时，才按需调用一次 mode=\"screenshot\", send_to_group=false 查看画面；\n"
+                f"3. 除非本局打完结算或主人主动询问，中间爬塔回合请一律保持群聊静默(silent)，不要每一步都往群里发图或发消息。"
             )
             ok_inj, info = inject_cloud_autoplay_turn(turn_prompt, img_b64)
             if ok_inj:
@@ -1347,7 +1343,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         w, h = get_screen_size()
         img_b64 = ""
-        if ok and mode != "status":
+        # 不用每一步都截图：仅在显式调用 mode="screenshot" 或传入 take_screenshot=True 时才截屏
+        if ok and (mode == "screenshot" or req.get("take_screenshot") is True):
             try:
                 img_b64 = capture_screenshot_b64()
             except Exception as e:
@@ -1488,7 +1485,7 @@ def reverse_tunnel_loop():
 
 def main():
     try:
-        server = HTTPServer((BRIDGE_HOST, BRIDGE_PORT), BridgeHandler)
+        server = ThreadingHTTPServer((BRIDGE_HOST, BRIDGE_PORT), BridgeHandler)
     except OSError:
         return
     threading.Thread(target=server.serve_forever, daemon=True).start()
