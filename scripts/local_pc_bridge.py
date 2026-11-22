@@ -973,10 +973,29 @@ class BridgeHandler(BaseHTTPRequestHandler):
             action_note = "已截取本地电脑实时画面"
         elif mode == "sts2_status":
             ensure_sts2_profile2()
-            focus_window_by_title("Slay the Spire 2")
+            ok_focus, _ = focus_window_by_title("Slay the Spire 2")
+            if not ok_focus:
+                sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
+                if os.path.exists(sts2_exe):
+                    try:
+                        subprocess.Popen([sts2_exe], cwd=os.path.dirname(sts2_exe))
+                        time.sleep(6.0)
+                        focus_window_by_title("Slay the Spire 2")
+                    except Exception:
+                        pass
             action_note = get_sts2_live_report()
         elif mode == "sts2_batch":
             ensure_sts2_profile2()
+            ok_focus, _ = focus_window_by_title("Slay the Spire 2")
+            if not ok_focus:
+                sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
+                if os.path.exists(sts2_exe):
+                    try:
+                        subprocess.Popen([sts2_exe], cwd=os.path.dirname(sts2_exe))
+                        time.sleep(6.0)
+                        focus_window_by_title("Slay the Spire 2")
+                    except Exception:
+                        pass
             ok, msg = execute_sts2_batch(
                 req.get("steps", []),
                 req.get("wait_after_ms", 2200),
