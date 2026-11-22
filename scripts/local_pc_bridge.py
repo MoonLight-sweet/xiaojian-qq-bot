@@ -409,17 +409,21 @@ def click_screen(x, y, button="left"):
     attach_input_desktop()
     tx, ty = scale_coords(x, y)
     ctypes.windll.user32.SetCursorPos(tx, ty)
-    time.sleep(0.08)
+    ctypes.windll.user32.mouse_event(0x0001, 0, 0, 0, 0)
+    time.sleep(0.10)
     if button == "right":
         ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)
+        time.sleep(0.06)
         ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)
     elif button == "double":
         for _ in range(2):
             ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+            time.sleep(0.05)
             ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
             time.sleep(0.06)
     else:
         ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+        time.sleep(0.07)
         ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
     time.sleep(0.15)
     return f"已在物理坐标 ({tx}, {ty}) 执行鼠标 {button} 点击"
@@ -1201,7 +1205,7 @@ def sts2_autoplay_daemon_loop():
                 f"【《杀戮尖塔2》全自动连续爬塔推进 第{next_turn}/{AUTOPLAY_STATE['max_turns']}轮（免截图极速模式）】\n"
                 f"{live_rep}\n"
                 f"请立即执行本回合操作：\n"
-                f"1. 不用每一步都截图！请优先根据上方后台实时存档（角色、血量、牌组、遗物、海克斯符文）和 godot.log 最新战斗日志，直接调用 local_pc_control(mode=\"sts2_batch\", send_to_group=false, steps=[...]) 一次性执行本回合整套动作（常用坐标：主菜单『单人模式』x=405,y=500；选人界面『铁甲战士』x=220,y=660、『储君』x=720,y=660、『亡灵契约师』x=600,y=660，右下角『启程/开始』x=1120,y=680；先古对话点击底部按钮x=640,y=620；海克斯符文三选一卡片分别在x=360,y=420 / x=640,y=420 / x=920,y=420；战斗中按数字键1-9选牌后点击目标怪物x=920,y=420或屏幕中央x=640,y=400，最后按 key=\"e\" 结束回合）；\n"
+                f"1. 不用每一步都截图！请优先根据上方后台实时存档（角色、血量、牌组、遗物、海克斯符文）和 godot.log 最新战斗日志，直接调用 local_pc_control(mode=\"sts2_batch\", send_to_group=false, steps=[...]) 一次性执行本回合整套动作（常用坐标：主菜单『单人模式』x=515,y=515；选人界面『铁甲战士』x=348,y=660，右下角蓝色对勾『启程/开始』x=1220,y=550；先古对话点击底部选项x=640,y=620；海克斯符文三选一卡片分别在x=360,y=420 / x=640,y=420 / x=920,y=420；战斗中按数字键1-9选牌后点击目标怪物x=920,y=420或屏幕中央x=640,y=400，最后按 key=\"e\" 结束回合）；\n"
                 f"2. 仅当你根据日志完全无法判断当前停留在什么特殊弹窗/地图分叉时，才按需调用一次 mode=\"screenshot\", send_to_group=false 查看画面；\n"
                 f"3. 除非本局打完结算或主人主动询问，中间爬塔回合请一律保持群聊静默(silent)，不要每一步都往群里发图或发消息。"
             )
