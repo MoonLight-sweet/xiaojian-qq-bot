@@ -53,10 +53,12 @@ APP_ALIASES = {
     "bilibili": "哔哩哔哩",
     "网易云": "网易云音乐",
     "云音乐": "网易云音乐",
-    "杀戮尖塔": "Slay the Spire",
+    "杀戮尖塔": "Slay the Spire 2",
     "杀戮尖塔1": "Slay the Spire",
     "杀戮尖塔2": "Slay the Spire 2",
-    "尖塔": "Slay the Spire",
+    "尖塔": "Slay the Spire 2",
+    "尖塔2": "Slay the Spire 2",
+    "sts2": "Slay the Spire 2",
     "星露谷": "Stardew Valley",
     "星露谷物语": "Stardew Valley",
     "泰拉瑞亚": "Terraria",
@@ -318,6 +320,22 @@ def open_app_or_url(app_name):
         except Exception as e:
             return False, f"打开失败: {e}"
 
+    # 1.5 针对《杀戮尖塔2》优先确保处于2号练习存档槽位并支持直接从Steam安装目录启动
+    if raw.lower() in ("杀戮尖塔", "杀戮尖塔2", "尖塔", "尖塔2", "sts2", "slay the spire 2", "slaythespire2"):
+        ensure_sts2_profile2()
+        ok_focus, _ = focus_window_by_title("Slay the Spire 2")
+        if ok_focus:
+            return True, "已将运行中的《杀戮尖塔2》（2号练习存档槽位）切换至最前台\n" + get_sts2_live_report()
+        sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
+        if os.path.exists(sts2_exe):
+            try:
+                subprocess.Popen([sts2_exe], cwd=os.path.dirname(sts2_exe))
+                time.sleep(5.0)
+                focus_window_by_title("Slay the Spire 2")
+                return True, f"已启动《杀戮尖塔2》（已自动锁定为2号练习存档槽位，路径：{sts2_exe}）\n" + get_sts2_live_report()
+            except Exception as e:
+                return False, f"启动《杀戮尖塔2》失败: {e}"
+
     # 2. 如果窗口已经打开，优先把它切到最前台，再同时触发启动
     target = APP_ALIASES.get(raw.lower(), raw)
     shortcuts = scan_installed_shortcuts()
@@ -498,6 +516,329 @@ def capture_screenshot_b64():
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+# ==================== 《杀戮尖塔2》专属状态解析、攻略联动与复盘系统 ====================
+
+STS2_APPDATA = r"C:\Users\Moon\AppData\Roaming\SlayTheSpire2"
+STS2_STEAM_DIR = os.path.join(STS2_APPDATA, "steam", "76561199387227940")
+STS2_LOG_PATH = os.path.join(STS2_APPDATA, "logs", "godot.log")
+STS2_KNOWLEDGE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "data", "sts2_knowledge")
+)
+_STS2_DB_CACHE = None
+
+
+def load_sts2_zhs_db():
+    global _STS2_DB_CACHE
+    if _STS2_DB_CACHE is not None:
+        return _STS2_DB_CACHE
+    db_path = os.path.join(STS2_KNOWLEDGE_DIR, "sts2_zhs_db.json")
+    if os.path.exists(db_path):
+        try:
+            with open(db_path, "r", encoding="utf-8") as f:
+                _STS2_DB_CACHE = json.load(f)
+                return _STS2_DB_CACHE
+        except Exception:
+            pass
+    _STS2_DB_CACHE = {"cards": {}, "relics": {}, "monsters": {}, "powers": {}, "potions": {}, "characters": {}}
+    return _STS2_DB_CACHE
+
+
+def ensure_sts2_profile2():
+    """强制确保《杀戮尖塔2》处于2号存档槽位(profile2)，保护主人的1号存档槽位(profile1)"""
+    for sub in ("", "modded"):
+        base_sub = os.path.join(STS2_STEAM_DIR, sub) if sub else STS2_STEAM_DIR
+        if not os.path.exists(base_sub):
+            continue
+        prof_save = os.path.join(base_sub, "profile.save")
+        try:
+            with open(prof_save, "w", encoding="utf-8") as f:
+                json.dump({"last_profile_id": 2, "schema_version": 2}, f, indent=2)
+        except Exception:
+            pass
+
+
+def translate_sts2_log_line(line):
+    db = load_sts2_zhs_db()
+    out = line.strip()
+    for prefix, cat in (
+        ("playing card ", "cards"),
+        ("RELIC.", "relics"),
+        ("CHARACTER.", "characters"),
+        ("MONSTER.", "monsters"),
+        ("ENCOUNTER.", "monsters"),
+    ):
+        if prefix in out:
+            for token in out.replace("(", " ").replace(")", " ").split():
+                clean_tok = token.replace("RELIC.", "").replace("CHARACTER.", "").replace("MONSTER.", "").replace("ENCOUNTER.", "")
+                info = db.get(cat, {}).get(clean_tok)
+                if isinstance(info, dict) and info.get("title"):
+                    out = out.replace(token, f"{token}({info['title']})")
+                elif isinstance(info, str) and info:
+                    out = out.replace(token, f"{token}({info})")
+    return out
+
+
+def get_sts2_recent_logs(max_lines=16):
+    if not os.path.exists(STS2_LOG_PATH):
+        return []
+    try:
+        with open(STS2_LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()[-120:]
+        interesting = []
+        for ln in lines:
+            if any(
+                k in ln
+                for k in (
+                    "Player 1 playing card",
+                    "Player 1 obtained",
+                    "Player 1 selected",
+                    "Monster ",
+                    "fought ",
+                    "Card rarity",
+                    "current_run.save",
+                    "died",
+                    "Defeated",
+                )
+            ):
+                interesting.append(translate_sts2_log_line(ln))
+        return interesting[-max_lines:]
+    except Exception:
+        return []
+
+
+def get_sts2_live_report():
+    """读取本机《杀戮尖塔2》2号槽位的实时存档、官方中文卡牌/遗物效果、最新战斗日志、局内流派便签与避坑铁律"""
+    db = load_sts2_zhs_db()
+    lines = ["【《杀戮尖塔2》后台实时数据与攻略复盘面板（当前锁定：2号练习存档槽位 profile2）】"]
+
+    # 1. 查找2号槽位的 current_run.save
+    candidates = [
+        os.path.join(STS2_STEAM_DIR, "modded", "profile2", "saves", "current_run.save"),
+        os.path.join(STS2_STEAM_DIR, "profile2", "saves", "current_run.save"),
+    ]
+    existing = [p for p in candidates if os.path.exists(p)]
+    run_file = max(existing, key=lambda p: os.path.getmtime(p)) if existing else None
+
+    active_char_cn = ""
+    if run_file:
+        try:
+            with open(run_file, "r", encoding="utf-8") as f:
+                rd = json.load(f)
+            asc = rd.get("ascension", 0)
+            act_idx = rd.get("current_act_index", 0) + 1
+            coords = rd.get("visited_map_coords", [])
+            floor_num = len(coords)
+            p0 = (rd.get("players") or [{}])[0]
+            char_id = p0.get("character_id", p0.get("character", "")).replace("CHARACTER.", "")
+            active_char_cn = db.get("characters", {}).get(char_id, {}).get("title", char_id)
+            cur_hp = p0.get("current_hp", "?")
+            max_hp = p0.get("max_hp", "?")
+            gold = p0.get("gold", "?")
+
+            # 统计卡组与官方中文效果
+            deck_counts = {}
+            for c in p0.get("deck", []):
+                cid = c.get("id", "").replace("CARD.", "")
+                up = "+" if c.get("upgraded") or c.get("upgrade_level", 0) > 0 else ""
+                key = f"{cid}{up}"
+                deck_counts[key] = deck_counts.get(key, 0) + 1
+            deck_strs = []
+            for key, cnt in deck_counts.items():
+                raw_id = key.rstrip("+")
+                up_mark = "+" if key.endswith("+") else ""
+                cinfo = db.get("cards", {}).get(raw_id, {})
+                cname = cinfo.get("title", raw_id) + up_mark
+                cdesc = cinfo.get("desc", "")
+                if cdesc:
+                    deck_strs.append(f"{cname}x{cnt}({cdesc[:38]})")
+                else:
+                    deck_strs.append(f"{cname}x{cnt}")
+
+            # 统计遗物与药水
+            relic_strs = []
+            for r in p0.get("relics", []):
+                rid = (r.get("id", "") if isinstance(r, dict) else str(r)).replace("RELIC.", "")
+                rinfo = db.get("relics", {}).get(rid, {})
+                rname = rinfo.get("title", rid)
+                rdesc = rinfo.get("desc", "")
+                relic_strs.append(f"{rname}({rdesc[:32]})" if rdesc else rname)
+
+            potion_strs = []
+            for pot in p0.get("potions", []):
+                pid = (pot.get("id", "") if isinstance(pot, dict) else str(pot)).replace("POTION.", "")
+                if pid and "EMPTY" not in pid:
+                    pinfo = db.get("potions", {}).get(pid, {})
+                    pname = pinfo.get("title", pid)
+                    pdesc = pinfo.get("desc", "")
+                    potion_strs.append(f"{pname}({pdesc[:28]})" if pdesc else pname)
+
+            lines.append(
+                f"- 当前实时存档：角色={active_char_cn}({char_id}) | 进阶={asc} | 第{act_idx}幕-已走{floor_num}层 | 生命={cur_hp}/{max_hp} | 金币={gold}"
+            )
+            lines.append(f"- 当前遗物({len(relic_strs)})：{'；'.join(relic_strs) if relic_strs else '无'}")
+            if potion_strs:
+                lines.append(f"- 当前药水：{'；'.join(potion_strs)}")
+            lines.append(
+                f"- 当前牌组({sum(deck_counts.values())}张)：{' | '.join(deck_strs[:24])}"
+            )
+        except Exception as e:
+            lines.append(f"- 解析 current_run.save 异常: {e}")
+    else:
+        lines.append("- 当前实时存档：2号存档槽位暂无进行中的战局（处于主菜单、角色选择或刚结束上一局结算界面）。")
+
+    # 2. 读取局内流派规划便签
+    plan_file = os.path.join(STS2_KNOWLEDGE_DIR, "sts2_current_plan.json")
+    if os.path.exists(plan_file):
+        try:
+            with open(plan_file, "r", encoding="utf-8") as f:
+                plan = json.load(f)
+            lines.append(
+                f"- 局内流派便签：目标流派=「{plan.get('target_archetype','未定')}」 | 急需牌={plan.get('cards_needed',[])} | 禁拿牌={plan.get('cards_avoid',[])} | 备注={plan.get('current_floor_note','')}"
+            )
+        except Exception:
+            pass
+
+    # 3. 读取最新战斗日志與避坑铁律
+    rec_logs = get_sts2_recent_logs(12)
+    if rec_logs:
+        lines.append("- 最近后台战斗与出牌日志(godot.log)：\n  " + "\n  ".join(rec_logs))
+
+    lessons_file = os.path.join(STS2_KNOWLEDGE_DIR, "sts2_lessons_learned.json")
+    if os.path.exists(lessons_file):
+        try:
+            with open(lessons_file, "r", encoding="utf-8") as f:
+                les = json.load(f)
+            rules = les.get("global_iron_rules", [])[:3]
+            if rules:
+                lines.append("- 全局爬塔铁律：" + "；".join(rules))
+            # 检查最近日志里有没有命中特定怪物的避坑教训
+            joined_log = "\n".join(rec_logs)
+            for ename, edata in les.get("enemy_specific_lessons", {}).items():
+                if ename in joined_log:
+                    lines.append(f"- 【高危怪物避坑铁律-{ename}】：{edata.get('iron_rule','')}")
+        except Exception:
+            pass
+
+    lines.append(
+        "- 快捷键提示：手牌对应数字键 1-9（无目标牌按数字键后点屏幕中央 640,400；指向攻击牌按数字键后点目标怪物身体）；按 E 键结束回合；按 M 键看地图。建议优先用 mode=\"sts2_batch\" 一次性下达整回合动作！"
+    )
+    return "\n".join(lines)
+
+
+def execute_sts2_batch(steps, wait_after_ms=2200):
+    """单回合批量执行多步按键/点击/拖拽动作，省去一步一截图的额度消耗"""
+    attach_input_desktop()
+    focus_window_by_title("Slay the Spire 2")
+    if not isinstance(steps, list) or not steps:
+        return False, "sts2_batch 需提供非空的 steps 动作列表"
+
+    executed = []
+    for idx, st in enumerate(steps[:15], 1):
+        if not isinstance(st, dict):
+            continue
+        stype = str(st.get("type") or st.get("action") or "key").lower()
+        if stype in ("key", "hotkey"):
+            k = str(st.get("key", "space"))
+            ok, msg = press_key_or_hotkey(k)
+            executed.append(f"步{idx}[按键 {k}]: {'成功' if ok else msg}")
+        elif stype == "click":
+            x = st.get("x", 640)
+            y = st.get("y", 400)
+            btn = st.get("button", "left")
+            msg = click_screen(x, y, btn)
+            executed.append(f"步{idx}[点击 ({x},{y})]: {msg}")
+        elif stype == "drag":
+            msg = drag_screen(
+                st.get("x", 640),
+                st.get("y", 700),
+                st.get("to_x", 640),
+                st.get("to_y", 380),
+            )
+            executed.append(f"步{idx}[拖拽]: {msg}")
+        elif stype == "wait":
+            ms = max(100, min(int(st.get("ms", 800)), 5000))
+            time.sleep(ms / 1000.0)
+            executed.append(f"步{idx}[等待 {ms}ms]")
+        time.sleep(0.32)
+
+    wait_s = max(0.3, min(float(wait_after_ms or 2200) / 1000.0, 6.0))
+    time.sleep(wait_s)
+    summary = "已连贯执行《杀戮尖塔2》批量操作：\n" + "\n".join(executed) + "\n\n" + get_sts2_live_report()
+    return True, summary
+
+
+def update_sts2_review(req):
+    """更新局内流派定型便签，或写入阵亡/通关后的死因复盘与避坑铁律"""
+    os.makedirs(STS2_KNOWLEDGE_DIR, exist_ok=True)
+    plan_file = os.path.join(STS2_KNOWLEDGE_DIR, "sts2_current_plan.json")
+    lessons_file = os.path.join(STS2_KNOWLEDGE_DIR, "sts2_lessons_learned.json")
+    notes_done = []
+
+    # 1. 更新局内流派便签
+    if any(k in req for k in ("target_archetype", "plan_note", "cards_needed", "cards_avoid", "character")):
+        try:
+            plan = {}
+            if os.path.exists(plan_file):
+                with open(plan_file, "r", encoding="utf-8") as f:
+                    plan = json.load(f)
+            plan["profile_slot"] = 2
+            if req.get("character"):
+                plan["character"] = str(req["character"])
+            if req.get("target_archetype"):
+                plan["target_archetype"] = str(req["target_archetype"])
+            if req.get("cards_needed"):
+                plan["cards_needed"] = req["cards_needed"]
+            if req.get("cards_avoid"):
+                plan["cards_avoid"] = req["cards_avoid"]
+            if req.get("plan_note"):
+                plan["current_floor_note"] = str(req["plan_note"])
+            with open(plan_file, "w", encoding="utf-8") as f:
+                json.dump(plan, f, ensure_ascii=False, indent=2)
+            notes_done.append(f"已更新局内流派规划便签（目标流派：{plan.get('target_archetype')}）")
+        except Exception as e:
+            return False, f"更新流派便签失败: {e}"
+
+    # 2. 写入死因复盘与怪物避坑铁律
+    if any(k in req for k in ("enemy_name", "death_cause", "iron_rule", "run_summary")):
+        try:
+            les = {"version": 1, "global_iron_rules": [], "enemy_specific_lessons": {}, "run_reviews": []}
+            if os.path.exists(lessons_file):
+                with open(lessons_file, "r", encoding="utf-8") as f:
+                    les = json.load(f)
+            now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            les["updated_at"] = now_str
+            ename = str(req.get("enemy_name") or "").strip()
+            if ename and (req.get("death_cause") or req.get("iron_rule")):
+                prev = les.setdefault("enemy_specific_lessons", {}).get(ename, {})
+                les["enemy_specific_lessons"][ename] = {
+                    "deaths_recorded": int(prev.get("deaths_recorded", 0)) + 1,
+                    "death_cause": str(req.get("death_cause") or prev.get("death_cause", "")),
+                    "iron_rule": str(req.get("iron_rule") or prev.get("iron_rule", "")),
+                    "updated_at": now_str,
+                }
+                notes_done.append(f"已将「{ename}」的死因与避坑铁律写入长期经验库")
+            if req.get("run_summary") or req.get("iron_rule"):
+                les.setdefault("run_reviews", []).append(
+                    {
+                        "date": now_str,
+                        "character": str(req.get("character") or "未知"),
+                        "enemy_name": ename,
+                        "death_cause": str(req.get("death_cause") or ""),
+                        "iron_rule": str(req.get("iron_rule") or ""),
+                        "summary": str(req.get("run_summary") or req.get("iron_rule") or ""),
+                    }
+                )
+                notes_done.append("已归档本局实战复盘记录")
+            with open(lessons_file, "w", encoding="utf-8") as f:
+                json.dump(les, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            return False, f"写入死因复盘库失败: {e}"
+
+    if not notes_done:
+        return True, "未传入更新字段，当前状态如下：\n" + get_sts2_live_report()
+    return True, "；".join(notes_done) + "\n\n" + get_sts2_live_report()
+
+
 class BridgeHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
@@ -581,6 +922,35 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 err_msg = msg
         elif mode == "screenshot":
             action_note = "已截取本地电脑实时画面"
+        elif mode == "sts2_status":
+            ensure_sts2_profile2()
+            focus_window_by_title("Slay the Spire 2")
+            action_note = get_sts2_live_report()
+        elif mode == "sts2_batch":
+            ensure_sts2_profile2()
+            ok, msg = execute_sts2_batch(
+                req.get("steps", []),
+                req.get("wait_after_ms", 2200),
+            )
+            if ok:
+                action_note = msg
+            else:
+                err_msg = msg
+        elif mode == "sts2_review":
+            ok, msg = update_sts2_review(req)
+            if ok:
+                action_note = msg
+            else:
+                err_msg = msg
+
+        active_title = get_active_window_title()
+        if (
+            ok
+            and mode not in ("status", "sts2_status", "sts2_batch", "sts2_review")
+            and "slay the spire 2" in active_title.lower()
+            and "后台实时数据与攻略复盘面板" not in action_note
+        ):
+            action_note += "\n\n" + get_sts2_live_report()
 
         w, h = get_screen_size()
         img_b64 = ""

@@ -121,7 +121,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": LOCAL_PC_TOOL,
-            "description": "全方位连接并操控主人挂载的本地Windows电脑外接节点（Computer-Use Agent控制能力：支持启动任意桌面应用与游戏、强制切换窗口到最前台、关闭窗口、截屏看图、鼠标点击/拖拽/滚轮、键盘按键/组合快捷键、输入任意中英文文字、以及执行本地PowerShell命令）。每次执行动作后不仅可把实时画面发到QQ群，还会把最新屏幕画面保存为当前工作区下的 latest_screen.jpg（1280x800坐标系，红十字标出当前鼠标位置），你可以直接调用 read_file 读取 latest_screen.jpg 看清画面上的按钮位置再连续操作。权限与隐私铁律：仅限主人（role 为 owner）明确指示时才允许调用本工具进行截屏或操作电脑；普通群友要求时一律温和婉拒。",
+            "description": "全方位连接并操控主人挂载的本地Windows电脑外接节点（支持启动任意桌面应用与游戏、强制切换窗口到最前台、关闭窗口、截屏看图、鼠标点击/拖拽/滚轮、键盘按键/组合快捷键、输入任意中英文文字、执行本地PowerShell命令，以及《杀戮尖塔2》专属实时存档/日志读取、单回合批量出牌与死因复盘进化系统）。每次执行动作后不仅可把实时画面发到QQ群，还会把最新屏幕画面保存为当前工作区下的 latest_screen.jpg（1280x800坐标系，红十字标出当前鼠标位置），你可以直接调用 read_file 读取 latest_screen.jpg 看清画面上的按钮位置再连续操作（工作区下的 sts2_knowledge/sts2_strategy_guide.md 还存有B站与小黑盒《杀戮尖塔2》完整攻略）。权限与隐私铁律：仅限主人（role 为 owner）明确指示时才允许调用本工具进行截屏或操作电脑；普通群友要求时一律温和婉拒。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -138,9 +138,12 @@ pub fn tool_definitions() -> Value {
                             "scroll",
                             "key",
                             "type_text",
-                            "run_command"
+                            "run_command",
+                            "sts2_status",
+                            "sts2_batch",
+                            "sts2_review"
                         ],
-                        "description": "status：查看当前已打开窗口与本机已安装应用/游戏列表；open_app：按名称启动本地应用、游戏（如'微信'、'杀戮尖塔'、'星露谷'、'星铁'、'B站'、'网易云音乐'、'Steam'、'Chrome'）或网址；focus_window：强制将指定窗口切到最前台；close_window：关闭指定窗口；screenshot：截取实时屏幕；click：鼠标点击(x,y)；drag：从(x,y)拖拽到(to_x,to_y)；scroll：滚动滚轮；key：按键或组合键(如 alt+tab, win+d, space, enter, esc)；type_text：输入中英文文字；run_command：执行本地PowerShell命令"
+                        "description": "status：查看当前已打开窗口与本机已安装应用/游戏列表；open_app：按名称启动本地应用、游戏（如'杀戮尖塔2'、'微信'、'星露谷'、'星铁'、'B站'、'网易云音乐'、'Steam'、'Chrome'）或网址；focus_window：强制将指定窗口切到最前台；close_window：关闭指定窗口；screenshot：截取实时屏幕；click：鼠标点击(x,y)；drag：从(x,y)拖拽到(to_x,to_y)；scroll：滚动滚轮；key：按键或组合键(如 alt+tab, win+d, space, enter, esc)；type_text：输入中英文文字；run_command：执行本地PowerShell命令；sts2_status：读取《杀戮尖塔2》2号练习槽位的实时存档(含官方中文卡牌/遗物效果)、最新战斗日志、流派便签与死因避坑铁律并截图；sts2_batch：单回合一次性批量执行多步《杀戮尖塔2》按键/点击/拖拽动作并在动画结束后返回最新截图与日志；sts2_review：更新《杀戮尖塔2》局内流派规划便签，或在阵亡/通关后写入死因复盘与怪物避坑铁律"
                     },
                     "app_name": {
                         "type": "string",
@@ -194,6 +197,45 @@ pub fn tool_definitions() -> Value {
                     "command": {
                         "type": "string",
                         "description": "mode 为 run_command 时要在本机执行的 PowerShell 命令"
+                    },
+                    "steps": {
+                        "type": "array",
+                        "description": "mode 为 sts2_batch 时的批量动作列表，例如 [{\"type\":\"key\",\"key\":\"1\"},{\"type\":\"click\",\"x\":900,\"y\":420},{\"type\":\"key\",\"key\":\"e\"}]。支持 type: key / click / drag / wait",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "wait_after_ms": {
+                        "type": "integer",
+                        "description": "mode 为 sts2_batch 时执行完所有动作后等待动画结束再截图的毫秒数（默认 2200）"
+                    },
+                    "character": {
+                        "type": "string",
+                        "description": "mode 为 sts2_review 时记录的当前《杀戮尖塔2》角色名称"
+                    },
+                    "target_archetype": {
+                        "type": "string",
+                        "description": "mode 为 sts2_review 时更新的本局目标流派方向（如'储君-锻造王刃星能流'、'亡灵契约师-灾厄处决流'、'铁甲战士-烧牌小循环流'）"
+                    },
+                    "plan_note": {
+                        "type": "string",
+                        "description": "mode 为 sts2_review 时更新的当前层抓牌/路线规划便签备注"
+                    },
+                    "enemy_name": {
+                        "type": "string",
+                        "description": "mode 为 sts2_review 时复盘的怪物/首领名称（如'旧日雕像'、'骇鳗'、'蜂群术士'）"
+                    },
+                    "death_cause": {
+                        "type": "string",
+                        "description": "mode 为 sts2_review 时记录的阵亡/翻车死因诊断"
+                    },
+                    "iron_rule": {
+                        "type": "string",
+                        "description": "mode 为 sts2_review 时提炼的下次遇到该怪物的具体避坑铁律"
+                    },
+                    "run_summary": {
+                        "type": "string",
+                        "description": "mode 为 sts2_review 时记录的整局复盘总结"
                     }
                 },
                 "required": ["mode"]
