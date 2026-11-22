@@ -184,7 +184,9 @@ def list_visible_windows():
         win32gui.EnumWindows(enum_cb, None)
     except Exception:
         pass
-    return titles[:20]
+    priority = [t for t in titles if any(w in t.lower() for w in ("slay", "spire", "杀戮", "尖塔"))]
+    others = [t for t in titles if t not in priority]
+    return (priority + others)[:35]
 
 
 def scan_installed_shortcuts():
@@ -355,19 +357,9 @@ def open_app_or_url(app_name):
 
     # 1.5 针对《杀戮尖塔2》优先确保处于2号练习存档槽位并支持直接从Steam安装目录启动
     if raw.lower() in ("杀戮尖塔", "杀戮尖塔2", "尖塔", "尖塔2", "sts2", "slay the spire 2", "slaythespire2"):
-        ensure_sts2_profile2()
-        ok_focus, _ = focus_window_by_title("Slay the Spire 2")
-        if ok_focus:
-            return True, "已将运行中的《杀戮尖塔2》（2号练习存档槽位）切换至最前台\n" + get_sts2_live_report()
-        sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
-        if os.path.exists(sts2_exe):
-            try:
-                subprocess.Popen([sts2_exe], cwd=os.path.dirname(sts2_exe))
-                time.sleep(5.0)
-                focus_window_by_title("Slay the Spire 2")
-                return True, f"已启动《杀戮尖塔2》（已自动锁定为2号练习存档槽位，路径：{sts2_exe}）\n" + get_sts2_live_report()
-            except Exception as e:
-                return False, f"启动《杀戮尖塔2》失败: {e}"
+        if launch_sts2_on_interactive_desktop():
+            return True, "已启动《杀戮尖塔2》（已自动锁定为2号练习存档槽位并切换至最前台）\n" + get_sts2_live_report()
+        return False, "启动《杀戮尖塔2》失败"
 
     # 2. 如果窗口已经打开，优先把它切到最前台，再同时触发启动
     target = APP_ALIASES.get(raw.lower(), raw)
@@ -617,6 +609,46 @@ def ensure_sts2_profile2():
                 json.dump({"last_profile_id": 2, "schema_version": 2}, f, indent=2)
         except Exception:
             pass
+
+
+def launch_sts2_on_interactive_desktop():
+    """通过 Windows 交互桌面 Shell (Explorer COM) 启动《杀戮尖塔2》，确保100%在用户可见桌面上创建窗口"""
+    attach_input_desktop()
+    ensure_sts2_profile2()
+    ok_focus, _ = focus_window_by_title("Slay the Spire 2")
+    if ok_focus:
+        return True
+    sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
+    sts2_dir = os.path.dirname(sts2_exe)
+    appid_file = os.path.join(sts2_dir, "steam_appid.txt")
+    if not os.path.exists(appid_file):
+        try:
+            with open(appid_file, "w", encoding="utf-8") as f:
+                f.write("2868840")
+        except Exception:
+            pass
+    try:
+        # 委托交互桌面 Explorer Shell进程启动，避免后台子进程无窗口句柄(MainWindowHandle=0)
+        ps_cmd = (
+            f'$sh = New-Object -ComObject Shell.Application; '
+            f'$sh.ShellExecute("{sts2_exe}", "", "{sts2_dir}", "open", 1)'
+        )
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], timeout=8, capture_output=True)
+    except Exception:
+        try:
+            os.startfile(sts2_exe)
+        except Exception:
+            return False
+
+    # 等待 Godot 加载 6 个工坊模组并创建主窗口 (通常需 8~16 秒)
+    for _ in range(16):
+        time.sleep(1.0)
+        ok_f, _ = focus_window_by_title("Slay the Spire 2")
+        if ok_f:
+            time.sleep(2.0)
+            focus_window_by_title("Slay the Spire 2")
+            return True
+    return False
 
 
 def translate_sts2_log_line(line):
@@ -971,17 +1003,7 @@ def parse_finished_run_summary(run_path):
 
 
 def start_sts2_autoplay(max_turns=25):
-    ensure_sts2_profile2()
-    ok_focus, _ = focus_window_by_title("Slay the Spire 2")
-    if not ok_focus:
-        sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
-        if os.path.exists(sts2_exe):
-            try:
-                subprocess.Popen([sts2_exe], cwd=os.path.dirname(sts2_exe))
-                time.sleep(6.0)
-                focus_window_by_title("Slay the Spire 2")
-            except Exception:
-                pass
+    launch_sts2_on_interactive_desktop()
     AUTOPLAY_STATE["active"] = True
     AUTOPLAY_STATE["turn"] = 0
     AUTOPLAY_STATE["max_turns"] = max(3, min(int(max_turns or 25), 50))
@@ -1113,9 +1135,9 @@ def sts2_autoplay_daemon_loop():
 
             # 2. 检查窗口是否被关闭
             now = time.time()
-            if now - AUTOPLAY_STATE["started_at"] > 15.0:
+            if now - AUTOPLAY_STATE["started_at"] > 30.0:
                 vis = [w.lower() for w in list_visible_windows()]
-                if not any("slay the spire 2" in w for w in vis):
+                if not any("slay the spire" in w or "杀戮尖塔" in w for w in vis):
                     stop_sts2_autoplay("检测到《杀戮尖塔2》窗口已关闭")
                     continue
 
@@ -1266,33 +1288,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
         elif mode == "screenshot":
             action_note = "已截取本地电脑实时画面"
         elif mode == "sts2_status":
-            ensure_sts2_profile2()
-            ok_focus, _ = focus_window_by_title("Slay the Spire 2")
-            if not ok_focus:
-                sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
-                if os.path.exists(sts2_exe):
-                    try:
-                        subprocess.Popen([sts2_exe], cwd=os.path.dirname(sts2_exe))
-                        time.sleep(6.0)
-                        focus_window_by_title("Slay the Spire 2")
-                    except Exception:
-                        pass
+            launch_sts2_on_interactive_desktop()
             action_note = get_sts2_live_report()
             if req.get("autoplay") is not False and not AUTOPLAY_STATE["active"]:
                 start_sts2_autoplay(req.get("max_turns", 25))
                 action_note += "\n（已同步自动挂起后台连续爬塔推进引擎，本轮结束后将自动一回合接一回合连续推进！）"
         elif mode == "sts2_batch":
-            ensure_sts2_profile2()
-            ok_focus, _ = focus_window_by_title("Slay the Spire 2")
-            if not ok_focus:
-                sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
-                if os.path.exists(sts2_exe):
-                    try:
-                        subprocess.Popen([sts2_exe], cwd=os.path.dirname(sts2_exe))
-                        time.sleep(6.0)
-                        focus_window_by_title("Slay the Spire 2")
-                    except Exception:
-                        pass
+            launch_sts2_on_interactive_desktop()
             ok, msg = execute_sts2_batch(
                 req.get("steps", []),
                 req.get("wait_after_ms", 2200),
