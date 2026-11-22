@@ -28,6 +28,7 @@ import paramiko
 import win32clipboard
 import win32con
 import win32gui
+import win32process
 from PIL import ImageDraw, ImageGrab
 
 try:
@@ -382,7 +383,7 @@ def open_app_or_url(app_name):
 
     if matched_path:
         try:
-            os.startfile(matched_path)
+            spawn_on_default_desktop(f'cmd.exe /c start "" "{matched_path}"')
             time.sleep(2.2)
             # 尝试将新启动的窗口置顶
             focus_window_by_title(matched_name)
@@ -392,7 +393,7 @@ def open_app_or_url(app_name):
 
     # 3. 尝试通过系统命令 / Start-Process 启动（如 notepad, calc, explorer, cmd 等）
     try:
-        subprocess.Popen(["cmd", "/c", "start", "", raw], shell=False)
+        spawn_on_default_desktop(f'cmd.exe /c start "" "{raw}"')
         time.sleep(1.8)
         focus_window_by_title(raw)
         return True, f"已通过系统命令启动：{raw}"
@@ -611,8 +612,27 @@ def ensure_sts2_profile2():
             pass
 
 
+def spawn_on_default_desktop(cmd_line, cwd=None):
+    """显式指定 lpDesktop = 'winsta0\\default' 在用户真实物理交互桌面上创建 GUI 进程"""
+    si = win32process.STARTUPINFO()
+    si.lpDesktop = "winsta0\\default"
+    si.dwFlags = win32con.STARTF_USESHOWWINDOW
+    si.wShowWindow = win32con.SW_SHOWNORMAL
+    win32process.CreateProcess(
+        None,
+        cmd_line,
+        None,
+        None,
+        False,
+        0,
+        None,
+        cwd,
+        si,
+    )
+
+
 def launch_sts2_on_interactive_desktop():
-    """通过 Windows 交互桌面 Shell (Explorer COM) 启动《杀戮尖塔2》，确保100%在用户可见桌面上创建窗口"""
+    """通过 CreateProcess(lpDesktop='winsta0\\default') 启动《杀戮尖塔2》，确保100%在用户可见桌面上创建窗口"""
     attach_input_desktop()
     ensure_sts2_profile2()
     ok_focus, _ = focus_window_by_title("Slay the Spire 2")
@@ -628,20 +648,12 @@ def launch_sts2_on_interactive_desktop():
         except Exception:
             pass
     try:
-        # 委托交互桌面 Explorer Shell进程启动，避免后台子进程无窗口句柄(MainWindowHandle=0)
-        ps_cmd = (
-            f'$sh = New-Object -ComObject Shell.Application; '
-            f'$sh.ShellExecute("{sts2_exe}", "", "{sts2_dir}", "open", 1)'
-        )
-        subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], timeout=8, capture_output=True)
+        spawn_on_default_desktop(f'"{sts2_exe}"', sts2_dir)
     except Exception:
-        try:
-            os.startfile(sts2_exe)
-        except Exception:
-            return False
+        return False
 
-    # 等待 Godot 加载 6 个工坊模组并创建主窗口 (通常需 8~16 秒)
-    for _ in range(16):
+    # 等待 Godot 加载 6 个工坊模组并创建主窗口 (通常需 8~18 秒)
+    for _ in range(18):
         time.sleep(1.0)
         ok_f, _ = focus_window_by_title("Slay the Spire 2")
         if ok_f:
