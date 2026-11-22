@@ -1020,7 +1020,7 @@ def start_sts2_autoplay(max_turns=25):
     AUTOPLAY_STATE["turn"] = 0
     AUTOPLAY_STATE["max_turns"] = max(3, min(int(max_turns or 25), 50))
     AUTOPLAY_STATE["started_at"] = time.time()
-    AUTOPLAY_STATE["last_push_at"] = time.time()
+    AUTOPLAY_STATE["last_push_at"] = time.time() - 10.0
     AUTOPLAY_STATE["known_runs"] = list_profile2_history_runs()
     AUTOPLAY_STATE["stop_reason"] = ""
     return (
@@ -1038,50 +1038,41 @@ def stop_sts2_autoplay(reason="主动停止"):
 
 
 def inject_cloud_autoplay_turn(turn_text, img_b64):
-    """将最新带坐标网格的游戏截图上传至云端工作区 latest_screen.jpg，并向云端 bot.sqlite3 注入下一回合推进事件"""
+    """通过本机 18081 隧道检查云端空闲状态，并复用 active_ssh_transport 上传 latest_screen.jpg 及注入下一回合事件"""
+    import urllib.request
     try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(CLOUD_HOST, CLOUD_PORT, CLOUD_USER, CLOUD_PASS, timeout=12)
-
-        # 1. 检查云端当前是否空闲
-        _, out, _ = ssh.exec_command(
-            "curl -s -H 'Authorization: Bearer gemini-qq-bot-admin-token-2026-secret' http://127.0.0.1:18081/api/v1/status"
+        # 1. 直接通过本机 127.0.0.1:18081 正向隧道查询云端机器人空闲状态（零新建SSH开销）
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{CONSOLE_PORT}/api/v1/status",
+            headers={"Authorization": "Bearer gemini-qq-bot-admin-token-2026-secret"},
         )
-        st_raw = out.read().decode("utf-8", "ignore")
-        st = json.loads(st_raw)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            st = json.loads(resp.read().decode("utf-8", "ignore"))
+
         if not st.get("health", {}).get("production_ready"):
-            ssh.close()
             return False, "not_ready"
         if st.get("pending_messages", 0) > 0:
-            ssh.close()
             return False, "pending_messages"
         lanes = st.get("lanes") or []
         for ln in lanes:
             if ln.get("running") or ln.get("queued", 0) > 0:
-                ssh.close()
                 return False, "lane_busy"
         rec_calls = st.get("recent_calls") or []
         now_ts = int(time.time())
         if rec_calls:
             c0 = rec_calls[0]
             if c0.get("state") == "running":
-                ssh.close()
                 return False, "call_running"
             fin = c0.get("finished_at") or 0
             if now_ts - fin < 6:
-                ssh.close()
                 return False, "cooldown"
 
-        # 2. 写入最新截图到云端群工作区 latest_screen.jpg
-        if img_b64:
-            raw_jpg = base64.b64decode(img_b64)
-            sftp = ssh.open_sftp()
-            with sftp.file("/opt/gemini-qq-bot/data/agy-projects/1077671339/latest_screen.jpg", "wb") as rf:
-                rf.write(raw_jpg)
-            sftp.close()
+        # 2. 复用已有的 active_ssh_transport 打开一个会话，一次性写入 latest_screen.jpg 并插入 pending_events
+        with transport_lock:
+            tr = active_ssh_transport
+        if tr is None or not tr.is_active():
+            return False, "ssh_transport_inactive"
 
-        # 3. 构造 IncomingMessage 并插入 group_messages 与 pending_events
         msg_id = f"sts2_auto_{now_ts}_{AUTOPLAY_STATE['turn']}"
         incoming = {
             "bot_id": "3644193154",
@@ -1103,9 +1094,14 @@ def inject_cloud_autoplay_turn(turn_text, img_b64):
         }
         payload_b64 = base64.b64encode(json.dumps(incoming, ensure_ascii=False).encode("utf-8")).decode("ascii")
         text_b64 = base64.b64encode(f"@小简 {turn_text}".encode("utf-8")).decode("ascii")
+        img_str = img_b64 or ""
 
         remote_py = f"""
 import sqlite3, base64
+img_b64 = '{img_str}'
+if img_b64:
+    with open('/opt/gemini-qq-bot/data/agy-projects/1077671339/latest_screen.jpg', 'wb') as f:
+        f.write(base64.b64decode(img_b64))
 conn = sqlite3.connect('/opt/gemini-qq-bot/data/bot.sqlite3', timeout=10)
 cur = conn.cursor()
 payload = base64.b64decode('{payload_b64}').decode('utf-8')
@@ -1122,10 +1118,20 @@ conn.commit()
 conn.close()
 print('INJECTED_OK')
 """
-        _, out2, err2 = ssh.exec_command("python3 - <<'EOF'\n" + remote_py + "\nEOF")
-        res_out = out2.read().decode("utf-8", "ignore") + err2.read().decode("utf-8", "ignore")
-        ssh.close()
-        return ("INJECTED_OK" in res_out), res_out.strip()
+        chan = tr.open_session()
+        chan.settimeout(12)
+        chan.exec_command("python3 -")
+        chan.sendall(remote_py.encode("utf-8"))
+        chan.shutdown_write()
+        res_out = b""
+        while True:
+            chunk = chan.recv(4096)
+            if not chunk:
+                break
+            res_out += chunk
+        chan.close()
+        out_str = res_out.decode("utf-8", "ignore")
+        return ("INJECTED_OK" in out_str), out_str.strip()
     except Exception as e:
         return False, str(e)
 
