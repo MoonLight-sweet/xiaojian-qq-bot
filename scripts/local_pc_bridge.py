@@ -1057,8 +1057,6 @@ def inject_cloud_autoplay_turn(turn_text, img_b64):
 
         if not st.get("health", {}).get("production_ready"):
             return False, "not_ready"
-        if st.get("pending_messages", 0) > 0:
-            return False, "pending_messages"
         lanes = st.get("lanes") or []
         for ln in lanes:
             if ln.get("running") or ln.get("queued", 0) > 0:
