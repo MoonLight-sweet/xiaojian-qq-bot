@@ -530,22 +530,51 @@ def run_local_powershell(command):
         return False, f"执行命令失败: {e}"
 
 
-def capture_screenshot_b64():
+def capture_screenshot_b64(draw_grid=True):
     attach_input_desktop()
-    img = ImageGrab.grab()
+    raw_img = ImageGrab.grab()
+    orig_w, orig_h = raw_img.width, raw_img.height
     pt = ctypes.wintypes.POINT()
     ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-    draw = ImageDraw.Draw(img)
-    r = 10
-    draw.ellipse((pt.x - r, pt.y - r, pt.x + r, pt.y + r), outline="red", width=3)
-    draw.line((pt.x - 16, pt.y, pt.x + 16, pt.y), fill="red", width=2)
-    draw.line((pt.x, pt.y - 16, pt.x, pt.y + 16), fill="red", width=2)
 
-    if img.width > 1280:
-        new_h = int(img.height * (1280.0 / img.width))
-        img = img.resize((1280, new_h))
+    if orig_w > 1280:
+        new_h = int(orig_h * (1280.0 / orig_w))
+        img = raw_img.resize((1280, new_h))
+        mx = int(pt.x * (1280.0 / orig_w))
+        my = int(pt.y * (new_h / float(orig_h)))
+    else:
+        img = raw_img.copy()
+        mx, my = pt.x, pt.y
+
+    draw = ImageDraw.Draw(img)
+    # 绘制 1280x800 视觉坐标辅助刻度网格，方便大模型 read_file 看图精准定位按钮坐标
+    if draw_grid:
+        w, h = img.width, img.height
+        for gx in range(100, w, 100):
+            for gy in range(0, h, 8):
+                draw.point((gx, gy), fill=(0, 220, 255))
+            draw.rectangle((gx - 14, 2, gx + 16, 15), fill=(0, 0, 0))
+            draw.text((gx - 12, 3), str(gx), fill=(255, 240, 0))
+        for gy in range(100, h, 100):
+            for gx in range(0, w, 8):
+                draw.point((gx, gy), fill=(0, 220, 255))
+            draw.rectangle((2, gy - 7, 28, gy + 7), fill=(0, 0, 0))
+            draw.text((4, gy - 6), str(gy), fill=(255, 240, 0))
+        for gx in (200, 400, 640, 880, 1100):
+            for gy in (150, 300, 450, 600, 720):
+                if gx < w and gy < h:
+                    lbl = f"{gx},{gy}"
+                    draw.rectangle((gx - 2, gy - 2, gx + 44, gy + 11), fill=(0, 0, 0))
+                    draw.text((gx, gy - 1), lbl, fill=(0, 255, 180))
+
+    # 绘制当前鼠标红十字
+    r = 8
+    draw.ellipse((mx - r, my - r, mx + r, my + r), outline="red", width=2)
+    draw.line((mx - 14, my, mx + 14, my), fill="red", width=2)
+    draw.line((mx, my - 14, mx, my + 14), fill="red", width=2)
+
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=82)
+    img.convert("RGB").save(buf, format="JPEG", quality=84)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -885,6 +914,266 @@ def update_sts2_review(req):
     return True, "；".join(notes_done) + "\n\n" + get_sts2_live_report()
 
 
+# ==================== 《杀戮尖塔2》后台全自动连续爬塔与复盘推进引擎 ====================
+
+AUTOPLAY_STATE = {
+    "active": False,
+    "turn": 0,
+    "max_turns": 25,
+    "started_at": 0.0,
+    "last_push_at": 0.0,
+    "known_runs": set(),
+    "stop_reason": "",
+}
+
+
+def list_profile2_history_runs():
+    import glob
+    runs = set()
+    for sub in ("", "modded"):
+        base_sub = os.path.join(STS2_STEAM_DIR, sub) if sub else STS2_STEAM_DIR
+        pattern = os.path.join(base_sub, "profile2", "saves", "history", "*.run")
+        for p in glob.glob(pattern):
+            runs.add(os.path.abspath(p))
+    return runs
+
+
+def parse_finished_run_summary(run_path):
+    db = load_sts2_zhs_db()
+    try:
+        with open(run_path, "r", encoding="utf-8") as f:
+            rd = json.load(f)
+        p0 = (rd.get("players") or [{}])[0]
+        char_id = p0.get("character", p0.get("character_id", "")).replace("CHARACTER.", "")
+        char_name = db.get("characters", {}).get(char_id, {}).get("title", char_id)
+        win = rd.get("win", False)
+        killed_by = rd.get("killed_by_encounter", "").replace("ENCOUNTER.", "")
+        killed_by_cn = db.get("monsters", {}).get(killed_by, killed_by) or "未知怪物"
+        asc = rd.get("ascension", 0)
+        acts = rd.get("map_point_history", [])
+        floors = sum(len(a) for a in acts)
+        deck_ids = [c.get("id", "").replace("CARD.", "") for c in p0.get("deck", [])]
+        deck_cn = [db.get("cards", {}).get(cid, {}).get("title", cid) for cid in deck_ids]
+        relic_ids = [
+            (r.get("id", "") if isinstance(r, dict) else str(r)).replace("RELIC.", "")
+            for r in p0.get("relics", [])
+        ]
+        relic_cn = [db.get("relics", {}).get(rid, {}).get("title", rid) for rid in relic_ids]
+        return (
+            f"【本局结束战绩文件 {os.path.basename(run_path)}】\n"
+            f"- 角色：{char_name}（进阶{asc}） | 结果：{'通关胜利！' if win else f'第{floors}层阵亡'}\n"
+            f"- 致命遭遇/击败者：{killed_by_cn}({killed_by})\n"
+            f"- 最终遗物与海克斯符文：{'、'.join(relic_cn)}\n"
+            f"- 最终牌组({len(deck_cn)}张)：{'、'.join(deck_cn)}"
+        ), killed_by_cn, char_name
+    except Exception as e:
+        return f"解析结束战绩失败: {e}", "未知怪物", "未知角色"
+
+
+def start_sts2_autoplay(max_turns=25):
+    ensure_sts2_profile2()
+    ok_focus, _ = focus_window_by_title("Slay the Spire 2")
+    if not ok_focus:
+        sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
+        if os.path.exists(sts2_exe):
+            try:
+                subprocess.Popen([sts2_exe], cwd=os.path.dirname(sts2_exe))
+                time.sleep(6.0)
+                focus_window_by_title("Slay the Spire 2")
+            except Exception:
+                pass
+    AUTOPLAY_STATE["active"] = True
+    AUTOPLAY_STATE["turn"] = 0
+    AUTOPLAY_STATE["max_turns"] = max(3, min(int(max_turns or 25), 50))
+    AUTOPLAY_STATE["started_at"] = time.time()
+    AUTOPLAY_STATE["last_push_at"] = time.time()
+    AUTOPLAY_STATE["known_runs"] = list_profile2_history_runs()
+    AUTOPLAY_STATE["stop_reason"] = ""
+    return (
+        f"已开启《杀戮尖塔2》后台全自动连续爬塔循环（最大连续轮数：{AUTOPLAY_STATE['max_turns']}轮，本轮结束后将自动一回合接一回合连续推进，直到通关或阵亡复盘；"
+        "如需中途停止，可在群里喊停调用 mode=\"sts2_autoplay_stop\"，或将本机鼠标移至屏幕最左上角(0,0)紧急刹车）。\n\n"
+        + get_sts2_live_report()
+    )
+
+
+def stop_sts2_autoplay(reason="主动停止"):
+    was_active = AUTOPLAY_STATE["active"]
+    AUTOPLAY_STATE["active"] = False
+    AUTOPLAY_STATE["stop_reason"] = reason
+    return f"已停止《杀戮尖塔2》后台全自动连续爬塔循环（原因：{reason}，此前状态：{'运行中' if was_active else '未运行'}）。"
+
+
+def inject_cloud_autoplay_turn(turn_text, img_b64):
+    """将最新带坐标网格的游戏截图上传至云端工作区 latest_screen.jpg，并向云端 bot.sqlite3 注入下一回合推进事件"""
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(CLOUD_HOST, CLOUD_PORT, CLOUD_USER, CLOUD_PASS, timeout=12)
+
+        # 1. 检查云端当前是否空闲
+        _, out, _ = ssh.exec_command(
+            "curl -s -H 'Authorization: Bearer gemini-qq-bot-admin-token-2026-secret' http://127.0.0.1:18081/api/v1/status"
+        )
+        st_raw = out.read().decode("utf-8", "ignore")
+        st = json.loads(st_raw)
+        if not st.get("health", {}).get("production_ready"):
+            ssh.close()
+            return False, "not_ready"
+        if st.get("pending_messages", 0) > 0:
+            ssh.close()
+            return False, "pending_messages"
+        lanes = st.get("lanes") or []
+        for ln in lanes:
+            if ln.get("running") or ln.get("queued", 0) > 0:
+                ssh.close()
+                return False, "lane_busy"
+        rec_calls = st.get("recent_calls") or []
+        now_ts = int(time.time())
+        if rec_calls:
+            c0 = rec_calls[0]
+            if c0.get("state") == "running":
+                ssh.close()
+                return False, "call_running"
+            fin = c0.get("finished_at") or 0
+            if now_ts - fin < 6:
+                ssh.close()
+                return False, "cooldown"
+
+        # 2. 写入最新截图到云端群工作区 latest_screen.jpg
+        if img_b64:
+            raw_jpg = base64.b64decode(img_b64)
+            sftp = ssh.open_sftp()
+            with sftp.file("/opt/gemini-qq-bot/data/agy-projects/1077671339/latest_screen.jpg", "wb") as rf:
+                rf.write(raw_jpg)
+            sftp.close()
+
+        # 3. 构造 IncomingMessage 并插入 group_messages 与 pending_events
+        msg_id = f"sts2_auto_{now_ts}_{AUTOPLAY_STATE['turn']}"
+        incoming = {
+            "bot_id": "3644193154",
+            "group_id": "1077671339",
+            "message_id": msg_id,
+            "sender_id": "2895885973",
+            "speaker_ref": "u1",
+            "speaker_role": "owner",
+            "display_name": "濤",
+            "known_alias": None,
+            "received_at": now_ts,
+            "segments": [
+                {"kind": "at_bot"},
+                {"kind": "text", "text": f" {turn_text}"},
+            ],
+            "text": f"@小简 {turn_text}",
+            "mentions_bot": True,
+            "quote_of": None,
+        }
+        payload_b64 = base64.b64encode(json.dumps(incoming, ensure_ascii=False).encode("utf-8")).decode("ascii")
+        text_b64 = base64.b64encode(f"@小简 {turn_text}".encode("utf-8")).decode("ascii")
+
+        remote_py = f"""
+import sqlite3, base64
+conn = sqlite3.connect('/opt/gemini-qq-bot/data/bot.sqlite3', timeout=10)
+cur = conn.cursor()
+payload = base64.b64decode('{payload_b64}').decode('utf-8')
+txt = base64.b64decode('{text_b64}').decode('utf-8')
+cur.execute(
+    "INSERT OR IGNORE INTO group_messages (bot_id, group_id, message_id, user_id, sender_name, speaker_role, content, has_image, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+    ('3644193154', '1077671339', '{msg_id}', '2895885973', '濤', 'owner', txt, {now_ts})
+)
+cur.execute(
+    "INSERT OR IGNORE INTO pending_events (bot_id, group_id, message_id, sender_id, received_at, normalized_payload, image_refs) VALUES (?, ?, ?, ?, ?, ?, '[]')",
+    ('3644193154', '1077671339', '{msg_id}', '2895885973', {now_ts}, payload)
+)
+conn.commit()
+conn.close()
+print('INJECTED_OK')
+"""
+        _, out2, err2 = ssh.exec_command("python3 - <<'EOF'\n" + remote_py + "\nEOF")
+        res_out = out2.read().decode("utf-8", "ignore") + err2.read().decode("utf-8", "ignore")
+        ssh.close()
+        return ("INJECTED_OK" in res_out), res_out.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def sts2_autoplay_daemon_loop():
+    """后台全自动连续爬塔推进守护线程"""
+    while True:
+        time.sleep(4.0)
+        if not AUTOPLAY_STATE["active"]:
+            continue
+        try:
+            attach_input_desktop()
+            # 1. 紧急物理刹车：鼠标移到最左上角 (0, 0)
+            pt = ctypes.wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            if pt.x <= 15 and pt.y <= 15:
+                stop_sts2_autoplay("检测到本机鼠标移至屏幕左上角(0,0)紧急刹车区")
+                continue
+
+            # 2. 检查窗口是否被关闭
+            now = time.time()
+            if now - AUTOPLAY_STATE["started_at"] > 15.0:
+                vis = [w.lower() for w in list_visible_windows()]
+                if not any("slay the spire 2" in w for w in vis):
+                    stop_sts2_autoplay("检测到《杀戮尖塔2》窗口已关闭")
+                    continue
+
+            # 3. 距离上次推进至少间隔 15 秒
+            if now - AUTOPLAY_STATE["last_push_at"] < 15.0:
+                continue
+
+            # 4. 检查是否产生了新的结束战绩文件 (.run)，若是则触发终局死因复盘并停止循环
+            cur_runs = list_profile2_history_runs()
+            new_runs = sorted(list(cur_runs - AUTOPLAY_STATE["known_runs"]))
+            if new_runs:
+                latest_run = new_runs[-1]
+                AUTOPLAY_STATE["known_runs"] = cur_runs
+                focus_window_by_title("Slay the Spire 2")
+                img_b64 = capture_screenshot_b64(draw_grid=True)
+                run_summary, killed_by_cn, char_name = parse_finished_run_summary(latest_run)
+                rec_logs = "\n  ".join(get_sts2_recent_logs(16))
+                review_prompt = (
+                    f"【《杀戮尖塔2》自动爬塔终局复盘触发】本局游戏已结束！\n{run_summary}\n"
+                    f"- 死前/终局最后战斗日志：\n  {rec_logs}\n"
+                    f"请立即执行以下收尾动作：\n"
+                    f"1. 调用 local_pc_control(mode=\"sts2_review\", character=\"{char_name}\", enemy_name=\"{killed_by_cn}\", death_cause=\"结合日志与卡组分析具体死因\", iron_rule=\"提炼下次遇到该怪物的具体避坑铁律\", run_summary=\"本局完整复盘总结\", send_to_group=true) 将本局教训永久写入经验库并将结算画面发群；\n"
+                    f"2. 在群里向主人汇报本局爬塔到达的层数、死因诊断以及新记下的避坑铁律！"
+                )
+                ok_inj, info = inject_cloud_autoplay_turn(review_prompt, img_b64)
+                if ok_inj:
+                    stop_sts2_autoplay(f"本局已结束并触发终局复盘({os.path.basename(latest_run)})")
+                continue
+
+            # 5. 检查轮数上限
+            if AUTOPLAY_STATE["turn"] >= AUTOPLAY_STATE["max_turns"]:
+                stop_sts2_autoplay(f"已达到单次自动连续爬塔上限({AUTOPLAY_STATE['max_turns']}轮)")
+                continue
+
+            # 6. 置顶游戏窗口、截取带 1280x800 坐标网格的最新画面并推进下一回合
+            focus_window_by_title("Slay the Spire 2")
+            img_b64 = capture_screenshot_b64(draw_grid=True)
+            live_rep = get_sts2_live_report()
+            next_turn = AUTOPLAY_STATE["turn"] + 1
+            should_broadcast = (next_turn == 1) or (next_turn % 4 == 0)
+            turn_prompt = (
+                f"【《杀戮尖塔2》全自动连续爬塔推进 第{next_turn}/{AUTOPLAY_STATE['max_turns']}轮】\n"
+                f"最新带 1280x800 坐标刻度网格的实时画面已同步至工作区 `latest_screen.jpg`。\n"
+                f"{live_rep}\n"
+                f"请立即按顺序执行本回合操作：\n"
+                f"1. 必须先调用 read_file 查看 `latest_screen.jpg`，根据画面上的黄绿色坐标刻度看清当前界面（主菜单/角色选择/先古对话/海克斯符文三选一/地图节点/战斗出牌回合/战后领奖选牌/火堆/商店/事件/死亡结算）及要点击的精确(x,y)坐标；\n"
+                f"2. 调用 local_pc_control(mode=\"sts2_batch\", send_to_group={'true' if should_broadcast else 'false'}, steps=[...]) 一次性执行本回合整套动作（例如：战斗回合先算好总伤害与费用，用数字键1-9选牌配合click点击目标怪物(如x=920,y=420)或屏幕中央(x=640,y=400)，最后按 key=\"e\" 结束回合；若选牌/选海克斯后确定了流派，可顺带调 sts2_review 更新局内流派便签；若画面已是死亡/胜利结算界面，请调 sts2_review 写入死因复盘并调 sts2_autoplay_stop 停止循环）；\n"
+                f"3. 防刷屏要求：{'本轮是播报节点，请在群里用一两句话简短汇报当前打到第几层、血量与出牌/抓牌决策' if should_broadcast else '本轮是中间连续推进步，执行完 sts2_batch 后请直接在回复中选择静默(silent)不要往群里发文字，避免刷屏'}。"
+            )
+            ok_inj, info = inject_cloud_autoplay_turn(turn_prompt, img_b64)
+            if ok_inj:
+                AUTOPLAY_STATE["turn"] = next_turn
+                AUTOPLAY_STATE["last_push_at"] = time.time()
+                print(f"[STS2-AUTOPLAY] 已成功推进第 {next_turn}/{AUTOPLAY_STATE['max_turns']} 轮")
+        except Exception as e:
+            print(f"[STS2-AUTOPLAY] 循环异常: {e}")
+
+
 class BridgeHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
@@ -913,9 +1202,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
         err_msg = None
 
         if mode == "open_app":
-            ok, msg = open_app_or_url(str(req.get("app_name") or req.get("window_title") or ""))
+            app_arg = str(req.get("app_name") or req.get("window_title") or "")
+            ok, msg = open_app_or_url(app_arg)
             if ok:
                 action_note = msg
+                if any(k in app_arg.lower() for k in ("杀戮尖塔", "尖塔", "sts2", "slay the spire")) and req.get("autoplay") is not False:
+                    if not AUTOPLAY_STATE["active"]:
+                        start_sts2_autoplay(req.get("max_turns", 25))
+                        action_note += "\n（已同步自动挂起后台连续爬塔推进引擎，本轮结束后将自动一回合接一回合连续推进！）"
             else:
                 err_msg = msg
         elif mode == "focus_window":
@@ -984,6 +1278,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
             action_note = get_sts2_live_report()
+            if req.get("autoplay") is not False and not AUTOPLAY_STATE["active"]:
+                start_sts2_autoplay(req.get("max_turns", 25))
+                action_note += "\n（已同步自动挂起后台连续爬塔推进引擎，本轮结束后将自动一回合接一回合连续推进！）"
         elif mode == "sts2_batch":
             ensure_sts2_profile2()
             ok_focus, _ = focus_window_by_title("Slay the Spire 2")
@@ -1002,6 +1299,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
             )
             if ok:
                 action_note = msg
+                if AUTOPLAY_STATE["active"]:
+                    AUTOPLAY_STATE["last_push_at"] = time.time()
             else:
                 err_msg = msg
         elif mode == "sts2_review":
@@ -1010,6 +1309,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 action_note = msg
             else:
                 err_msg = msg
+        elif mode == "sts2_autoplay_start":
+            action_note = start_sts2_autoplay(req.get("max_turns", 25))
+        elif mode == "sts2_autoplay_stop":
+            action_note = stop_sts2_autoplay(str(req.get("reason") or "主人或机器人主动停止"))
 
         active_title = get_active_window_title()
         if (
@@ -1167,6 +1470,7 @@ def main():
     except OSError:
         return
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=sts2_autoplay_daemon_loop, daemon=True).start()
     start_console_forward_listener()
     print(f"[BRIDGE] 本地电脑全功能控制服务已启动于 http://{BRIDGE_HOST}:{BRIDGE_PORT}")
     reverse_tunnel_loop()
