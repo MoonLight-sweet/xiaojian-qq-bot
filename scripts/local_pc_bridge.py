@@ -1107,7 +1107,7 @@ cur = conn.cursor()
 payload = base64.b64decode('{payload_b64}').decode('utf-8')
 txt = base64.b64decode('{text_b64}').decode('utf-8')
 cur.execute(
-    "INSERT OR IGNORE INTO group_messages (bot_id, group_id, message_id, user_id, sender_name, speaker_role, content, has_image, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+    "INSERT OR IGNORE INTO group_messages (bot_id, group_id, message_id, sender_id, display_name, speaker_role, text, has_image, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
     ('3644193154', '1077671339', '{msg_id}', '2895885973', '濤', 'owner', txt, {now_ts})
 )
 cur.execute(
@@ -1209,9 +1209,11 @@ def sts2_autoplay_daemon_loop():
             if ok_inj:
                 AUTOPLAY_STATE["turn"] = next_turn
                 AUTOPLAY_STATE["last_push_at"] = time.time()
-                print(f"[STS2-AUTOPLAY] 已成功推进第 {next_turn}/{AUTOPLAY_STATE['max_turns']} 轮")
+                print(f"[STS2-AUTOPLAY] 已成功推进第 {next_turn}/{AUTOPLAY_STATE['max_turns']} 轮", flush=True)
+            else:
+                print(f"[STS2-AUTOPLAY] 等待推进第 {next_turn} 轮 ({info})", flush=True)
         except Exception as e:
-            print(f"[STS2-AUTOPLAY] 循环异常: {e}")
+            print(f"[STS2-AUTOPLAY] 循环异常: {e}", flush=True)
 
 
 class BridgeHandler(BaseHTTPRequestHandler):
