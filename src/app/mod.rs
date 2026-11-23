@@ -454,7 +454,7 @@ impl App {
                 },
             )),
         };
-        self.mount_console(api)
+        self.mount_console(api).merge(study_hub_proxy_router())
     }
 
     /// Serve the built web console under `/console/` when `WEB_DIST`
@@ -470,6 +470,68 @@ impl App {
         }
         api.nest_service("/console", tower_http::services::ServeDir::new(dir))
     }
+}
+
+fn study_hub_proxy_router() -> Router {
+    use axum::routing::any;
+    Router::new().route("/study/{*rest}", any(proxy_study_hub))
+}
+
+async fn proxy_study_hub(
+    axum::extract::Path(rest): axum::extract::Path<String>,
+    method: axum::http::Method,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let url = format!("http://127.0.0.1:18086/study/{rest}");
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("study_hub client err: {e}"),
+            )
+                .into_response();
+        }
+    };
+    let req = if method == axum::http::Method::POST {
+        client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(body)
+    } else {
+        client.get(&url)
+    };
+    match req.send().await {
+        Ok(resp) => {
+            let status = axum::http::StatusCode::from_u16(resp.status().as_u16())
+                .unwrap_or(axum::http::StatusCode::OK);
+            let ct = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("text/html; charset=utf-8")
+                .to_string();
+            let bytes = resp.bytes().await.unwrap_or_default();
+            (
+                status,
+                [(axum::http::header::CONTENT_TYPE, ct)],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(e) => (
+            axum::http::StatusCode::BAD_GATEWAY,
+            format!("study_hub unavailable: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+impl App {
 
     /// Spawn the OneBot supervisor, the flush loop, health refresh and the admin server.
     pub async fn serve(self: Arc<Self>) -> BotResult<()> {

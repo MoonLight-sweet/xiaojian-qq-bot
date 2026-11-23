@@ -16,6 +16,7 @@ pub const PROFILE_TOOL: &str = "profile_update";
 pub const QZONE_TOOL: &str = "qzone_publish";
 pub const MEMEWIKI_TOOL: &str = "search_meme_wiki";
 pub const LOCAL_PC_TOOL: &str = "local_pc_control";
+pub const STUDY_HUB_TOOL: &str = "study_hub";
 
 /// Cooldown for autonomous global profile/avatar change: once per 24 hours.
 const SELF_PROFILE_COOLDOWN_SECS: i64 = 86_400;
@@ -238,6 +239,80 @@ pub fn tool_definitions() -> Value {
                     "run_summary": {
                         "type": "string",
                         "description": "mode 为 sts2_review 时记录的整局复盘总结"
+                    }
+                },
+                "required": ["mode"]
+            }
+        },
+        {
+            "name": STUDY_HUB_TOOL,
+            "description": "个性化学习计划与在线互动测验中心（仿 Gemini 的『查看你的个性化学习计划』与『通过测验检验学习成果』）。调用 create_plan 或 create_quiz 后会自动渲染一张高清精美预览卡片图并直接发送到当前 QQ 群，同时返回一条专属可点击的互动网页链接（用户点开即可像 Gemini 一样在线勾选学习进度、点选 A/B/C/D 选项实时判分看解析，进度与错题会自动回传保存）。你只需在群回复里把返回的链接自然地发给对方即可。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["create_plan", "get_plan", "create_quiz", "get_quiz_result"],
+                        "description": "create_plan：制定新的个性化学习计划并自动发卡片预览图到群里；get_plan：查看当前最新的学习计划进度（用户在网页上勾选后会实时同步）并重发最新进度图；create_quiz：出一套3-10道题的在线互动测验并自动发测验预览图到群里；get_quiz_result：查看用户最近一次测验的得分、作答进度与错题明细以便点评讲解"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "学习主题或学科标签（如 'SpringBoot 后端'、'英语六级'、'数据结构'）"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "学习计划或测验的主标题（简洁醒目，如 'SpringBoot 7天实战突破计划'）"
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "mode 为 create_plan 时的一句话总体目标与节奏简介"
+                    },
+                    "difficulty": {
+                        "type": "string",
+                        "description": "mode 为 create_quiz 时的难度标签（如 '入门'、'适中'、'进阶'）"
+                    },
+                    "stages": {
+                        "type": "array",
+                        "description": "mode 为 create_plan 时的分阶段任务列表，每项含 stage_title（阶段名）与 tasks（任务数组，每项含 text 与可选 tip 学习要点）",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "stage_title": {"type": "string"},
+                                "tasks": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "text": {"type": "string"},
+                                            "tip": {"type": "string"},
+                                            "done": {"type": "boolean"}
+                                        },
+                                        "required": ["text"]
+                                    }
+                                }
+                            },
+                            "required": ["stage_title", "tasks"]
+                        }
+                    },
+                    "questions": {
+                        "type": "array",
+                        "description": "mode 为 create_quiz 时的选择题数组（建议3到6题），每题含 question（题干）、options（4个选项字符串数组）、answer（正确答案索引0-3）、explanation（详细解析）、hint（可选解题提示）、tag（可选知识点标签）",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {"type": "string"},
+                                "options": {"type": "array", "items": {"type": "string"}},
+                                "answer": {"type": "integer", "minimum": 0, "maximum": 3},
+                                "explanation": {"type": "string"},
+                                "hint": {"type": "string"},
+                                "tag": {"type": "string"}
+                            },
+                            "required": ["question", "options", "answer", "explanation"]
+                        }
+                    },
+                    "send_to_group": {
+                        "type": "boolean",
+                        "description": "是否自动把生成的高清卡片预览图直接发送到当前QQ群（默认 true）"
                     }
                 },
                 "required": ["mode"]
@@ -1571,4 +1646,148 @@ pub async fn call_local_pc_control(store: &SqliteStore, scope: &Scope, args: &Va
         ));
     }
     tool_ok(report)
+}
+
+pub async fn call_study_hub(store: &SqliteStore, scope: &Scope, args: &Value) -> Value {
+    let mode = args
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("get_plan");
+    let send_to_group = args
+        .get("send_to_group")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    let endpoint = match mode {
+        "create_plan" => "/internal/api/plan/create",
+        "get_plan" => "/internal/api/plan/latest",
+        "create_quiz" => "/internal/api/quiz/create",
+        "get_quiz_result" => "/internal/api/quiz/latest",
+        other => return tool_err(format!("不支持的 study_hub mode: {other}")),
+    };
+
+    let mut payload = args.clone();
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("group_id".into(), json!(scope.group_id));
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return tool_err(format!("创建 HTTP 客户端失败: {e}")),
+    };
+
+    let base_url = std::env::var("STUDY_HUB_INTERNAL_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:18086".into());
+    let resp = match client
+        .post(format!("{}{}", base_url.trim_end_matches('/'), endpoint))
+        .header("X-Study-Token", "xiaojian-study-hub-2026")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return tool_err(format!("学习测验中心服务未响应: {e}")),
+    };
+
+    let body: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return tool_err(format!("解析学习测验中心响应失败: {e}")),
+    };
+
+    if body.get("ok").and_then(Value::as_bool) != Some(true) {
+        let err_msg = body
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("未知错误");
+        return tool_err(format!("学习测验中心执行失败: {err_msg}"));
+    }
+
+    let mut img_note = String::new();
+    if send_to_group
+        && let Some(b64) = body.get("image_base64").and_then(Value::as_str)
+        && !b64.is_empty()
+        && let Ok(gid) = scope.group_id.parse::<i64>()
+    {
+        let params = json!({
+            "group_id": gid,
+            "message": [
+                {
+                    "type": "image",
+                    "data": {
+                        "file": format!("base64://{b64}")
+                    }
+                }
+            ]
+        });
+        match onebot_call("send_group_msg", params).await {
+            Ok(_) => img_note = "（已将高清卡片预览图直接发送到当前QQ群）".to_string(),
+            Err(e) => img_note = format!("（卡片预览图发群失败: {e}）"),
+        }
+    }
+
+    let _ = store
+        .audit(
+            "agent",
+            &format!("mcp.study_hub.{mode}"),
+            Some(&scope.bot_id),
+            Some(&scope.group_id),
+            crate::now_unix(),
+        )
+        .await;
+
+    let url = body.get("url").and_then(Value::as_str).unwrap_or("");
+    let local_url = body.get("local_url").and_then(Value::as_str).unwrap_or("");
+
+    match mode {
+        "create_plan" => {
+            let done = body.get("done").and_then(Value::as_i64).unwrap_or(0);
+            let total = body.get("total").and_then(Value::as_i64).unwrap_or(0);
+            let pct = body.get("pct").and_then(Value::as_i64).unwrap_or(0);
+            tool_ok(format!(
+                "个性化学习计划已生成{img_note}\n- 当前进度：{done}/{total}（{pct}%）\n- 专属互动链接：{url}\n- 本机隧道直连备用链接：{local_url}\n请在回复中把链接直接发给对方，提醒对方点开即可在线勾选任务进度和查看学习要点。"
+            ))
+        }
+        "get_plan" => {
+            if body.get("found").and_then(Value::as_bool) != Some(true) {
+                return tool_ok("当前还没有创建过学习计划，可以直接调用 mode=\"create_plan\" 为对方量身定制一份。");
+            }
+            let title = body.get("title").and_then(Value::as_str).unwrap_or("");
+            let done = body.get("done").and_then(Value::as_i64).unwrap_or(0);
+            let total = body.get("total").and_then(Value::as_i64).unwrap_or(0);
+            let pct = body.get("pct").and_then(Value::as_i64).unwrap_or(0);
+            let stages_str = body
+                .get("stages")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            tool_ok(format!(
+                "已读取最新学习计划《{title}》{img_note}\n- 最新完成进度：{done}/{total}（{pct}%）\n- 专属互动链接：{url}\n- 本机隧道直连备用链接：{local_url}\n- 详细任务状态：{stages_str}"
+            ))
+        }
+        "create_quiz" => {
+            let total = body.get("total").and_then(Value::as_i64).unwrap_or(0);
+            tool_ok(format!(
+                "在线互动测验已生成（共 {total} 题）{img_note}\n- 专属答题链接：{url}\n- 本机隧道直连备用链接：{local_url}\n请在回复中把答题链接发给对方，提醒对方点开即可直接选答案、看提示和实时解析，答完后还能回群让你点评错题。"
+            ))
+        }
+        "get_quiz_result" => {
+            if body.get("found").and_then(Value::as_bool) != Some(true) {
+                return tool_ok("当前还没有测验记录，可以调用 mode=\"create_quiz\" 出一套测验题。");
+            }
+            let title = body.get("title").and_then(Value::as_str).unwrap_or("");
+            let answered = body.get("answered_count").and_then(Value::as_i64).unwrap_or(0);
+            let score = body.get("score").and_then(Value::as_i64).unwrap_or(0);
+            let total = body.get("total").and_then(Value::as_i64).unwrap_or(0);
+            let wrongs = body
+                .get("wrong_details")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            tool_ok(format!(
+                "最近一次测验《{title}》作答结果：\n- 已作答：{answered}/{total} 题 | 答对：{score} 题\n- 错题明细：{wrongs}\n- 原测验链接：{url}"
+            ))
+        }
+        _ => tool_ok("完成"),
+    }
 }

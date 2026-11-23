@@ -328,6 +328,7 @@ impl Session {
             extras::QZONE_TOOL => extras::call_qzone_publish(store, &scope, &args).await,
             extras::MEMEWIKI_TOOL => extras::call_search_meme_wiki(store, &scope, &args).await,
             extras::LOCAL_PC_TOOL => extras::call_local_pc_control(store, &scope, &args).await,
+            extras::STUDY_HUB_TOOL => extras::call_study_hub(store, &scope, &args).await,
             submit::TOOL_NAME => submit::call_submit(store, &scope, &args).await,
             _ => return memory::handle(store, &scope, frame).await,
         };
