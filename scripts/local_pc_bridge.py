@@ -618,19 +618,67 @@ def ensure_sts2_profile2():
             pass
 
 
+STS2_CONTROLLER_DIR = r"C:\Users\Moon\.gemini\antigravity\scratch\sts2-token-efficient-controller"
+
+
+def is_sts2_process_running():
+    try:
+        out = subprocess.check_output(
+            ["tasklist", "/FI", "IMAGENAME eq SlayTheSpire2.exe", "/NH"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="gbk",
+            errors="ignore",
+        )
+        return "SlayTheSpire2.exe" in out
+    except Exception:
+        return False
+
+
+def focus_sts2_game_window():
+    """精确置顶《杀戮尖塔2》游戏窗口，排除包含相同文字的浏览器标签页"""
+    attach_input_desktop()
+    matched = []
+
+    def enum_cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            title = (win32gui.GetWindowText(hwnd) or "").strip()
+            tl = title.lower()
+            if title == "Slay the Spire 2" or (
+                ("slay the spire 2" in tl or "杀戮尖塔2" in tl)
+                and not any(b in tl for b in ("chrome", "edge", "firefox", "github", "vscode", "antigravity"))
+            ):
+                matched.append((hwnd, title))
+
+    win32gui.EnumWindows(enum_cb, None)
+    if not matched:
+        return False, "未找到《杀戮尖塔2》游戏窗口"
+    hwnd, title = matched[0]
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
+        win32gui.SetForegroundWindow(hwnd)
+        return True, f"已置顶游戏窗口: {title}"
+    except Exception as e:
+        return False, f"置顶游戏窗口失败: {e}"
+
+
 def spawn_on_default_desktop(cmd_line, cwd=None):
-    """显式指定 lpDesktop = 'winsta0\\default' 在用户真实物理交互桌面上创建 GUI 进程"""
+    """显式指定 lpDesktop = 'winsta0\\default' 在用户真实物理交互桌面上创建独立 GUI 进程"""
     si = win32process.STARTUPINFO()
     si.lpDesktop = "winsta0\\default"
     si.dwFlags = win32con.STARTF_USESHOWWINDOW
     si.wShowWindow = win32con.SW_SHOWNORMAL
+    flags = win32process.CREATE_NEW_PROCESS_GROUP | win32process.DETACHED_PROCESS
     win32process.CreateProcess(
         None,
         cmd_line,
         None,
         None,
         False,
-        0,
+        flags,
         None,
         cwd,
         si,
@@ -638,11 +686,11 @@ def spawn_on_default_desktop(cmd_line, cwd=None):
 
 
 def launch_sts2_on_interactive_desktop():
-    """通过 CreateProcess(lpDesktop='winsta0\\default') 启动《杀戮尖塔2》，确保100%在用户可见桌面上创建窗口"""
+    """通过 CreateProcess(lpDesktop='winsta0\\default') 启动《杀戮尖塔2》，确保100%在用户可见桌面上创建独立进程"""
     attach_input_desktop()
     ensure_sts2_profile2()
-    ok_focus, _ = focus_window_by_title("Slay the Spire 2")
-    if ok_focus:
+    if is_sts2_process_running():
+        focus_sts2_game_window()
         return True
     sts2_exe = r"D:\SteamLibrary\steamapps\common\Slay the Spire 2\SlayTheSpire2.exe"
     sts2_dir = os.path.dirname(sts2_exe)
@@ -658,15 +706,177 @@ def launch_sts2_on_interactive_desktop():
     except Exception:
         return False
 
-    # 等待 Godot 加载 6 个工坊模组并创建主窗口 (通常需 8~18 秒)
-    for _ in range(18):
+    # 等待 Godot 加载工坊模组与 STS2AIAgent 并创建主窗口 (通常需 8~18 秒)
+    for _ in range(20):
         time.sleep(1.0)
-        ok_f, _ = focus_window_by_title("Slay the Spire 2")
+        ok_f, _ = focus_sts2_game_window()
         if ok_f:
             time.sleep(2.0)
-            focus_window_by_title("Slay the Spire 2")
+            focus_sts2_game_window()
             return True
     return False
+
+
+def run_sts2_cli(cli_args, timeout_s=25):
+    """调用本地 sts2-token-efficient-controller (对接游戏内 STS2AIAgent 通信模组)"""
+    if not os.path.exists(os.path.join(STS2_CONTROLLER_DIR, "sts2.js")):
+        return False, "未找到 sts2-token-efficient-controller 控制器目录"
+    try:
+        res = subprocess.run(
+            ["node", "sts2.js"] + list(cli_args),
+            cwd=STS2_CONTROLLER_DIR,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=timeout_s,
+        )
+        out = (res.stdout or "").strip()
+        err = (res.stderr or "").strip()
+        if res.returncode == 0:
+            return True, out or "执行完成"
+        return False, err or out or f"控制器退出码 {res.returncode}"
+    except Exception as e:
+        return False, f"调用 STS2 控制器异常: {e}"
+
+
+def get_sts2_agent_snapshot():
+    """直接读取游戏内 STS2AIAgent 本地接口的原始 JSON 决策快照（自动探测 8080/8081 等端口）"""
+    import urllib.request
+
+    for port in (8080, 8081, 8082, 18080):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/decision-snapshot", timeout=2.5) as r:
+                if r.status == 200:
+                    data = json.loads(r.read().decode("utf-8", "ignore"))
+                    return port, data
+        except Exception:
+            continue
+    return None, None
+
+
+def decide_sts2_smart_action(snap):
+    """基于 STS2AIAgent 精确内存状态，为本地自动爬塔生成 100% 精准的动作序列（零坐标误差）"""
+    state = snap.get("state") or snap
+    avail = snap.get("available_actions") or []
+    screen = str(state.get("screen_type") or state.get("screen") or "").upper()
+    avail_types = {str(a.get("type") or a.get("action") or "").lower() for a in avail if isinstance(a, dict)}
+
+    # 1. 战斗画面：精准计算来袭伤害、护甲缺口与集火目标
+    if screen == "COMBAT" or "play_card" in avail_types or "end_turn" in avail_types:
+        combat = state.get("combat") or state
+        player = combat.get("player") or state.get("player") or {}
+        energy = int(player.get("energy", 0) or 0)
+        block = int(player.get("block", 0) or 0)
+        hand = combat.get("hand") or []
+        enemies = [
+            (i, e) for i, e in enumerate(combat.get("enemies") or [])
+            if int(e.get("hp", e.get("current_hp", 0)) or 0) > 0 and not e.get("is_dead")
+        ]
+        if not enemies:
+            return "end", "场上无存活敌人，结束回合"
+
+        # 计算本回合怪物总来袭伤害
+        incoming_dmg = 0
+        for _, e in enemies:
+            intent = e.get("intent") or {}
+            dmg = int(intent.get("damage", e.get("intent_damage", 0)) or 0)
+            hits = int(intent.get("hits", intent.get("times", 1)) or 1)
+            if dmg > 0:
+                incoming_dmg += dmg * max(1, hits)
+
+        # 优先集火血量最低的存活怪
+        enemies.sort(key=lambda pair: int(pair[1].get("hp", pair[1].get("current_hp", 999)) or 999))
+        target_idx = enemies[0][0]
+
+        playable = []
+        for idx, c in enumerate(hand):
+            if c.get("playable") is False or c.get("is_playable") is False:
+                continue
+            cost = int(c.get("cost", 1) if c.get("cost") is not None else 1)
+            if cost < 0 or cost > energy:
+                continue
+            ctype = str(c.get("type") or "").lower()
+            cid = str(c.get("id") or c.get("name") or "").upper()
+            needs_target = bool(c.get("requires_target") or c.get("has_target") or str(c.get("target_type") or "").lower() in ("enemy", "single_enemy", "any_enemy"))
+            is_block = ("DEFEND" in cid or "SHIELD" in cid or "BLOCK" in cid or (ctype == "skill" and not needs_target))
+            is_vuln = ("BASH" in cid or "痛击" in cid or "TREMBLE" in cid or "战栗" in cid)
+            playable.append((idx, cost, ctype, needs_target, is_block, is_vuln, cid))
+
+        if not playable:
+            return "end", "手牌无可用牌，结束回合"
+
+        need_block = incoming_dmg > block + 3
+        chosen = None
+        if need_block:
+            blocks = [p for p in playable if p[4]]
+            if blocks:
+                chosen = blocks[0]
+        if chosen is None:
+            # 优先挂易伤 / 能力牌 / 攻击牌
+            vulns = [p for p in playable if p[5]]
+            powers = [p for p in playable if p[2] == "power"]
+            attacks = [p for p in playable if p[2] == "attack"]
+            if vulns:
+                chosen = vulns[0]
+            elif powers:
+                chosen = powers[0]
+            elif attacks:
+                chosen = attacks[0]
+            else:
+                chosen = playable[0]
+
+        c_idx, _, _, needs_target, _, _, cid = chosen
+        if needs_target:
+            return f"play {c_idx} {target_idx}", f"精准打出 {cid} 攻击 {target_idx}号目标"
+        return f"play {c_idx}", f"精准打出 {cid}"
+
+    # 2. 战利品与卡牌三选一
+    if "pick_card" in avail_types or screen in ("CARD_REWARD", "CARD_SELECT"):
+        return "pick_card 0; collect", "选择第一张奖励卡牌并自动领取战利品"
+    if "collect_reward" in avail_types or "collect" in avail_types or screen == "REWARDS":
+        return "collect; proceed", "自动领取全部战利品并前进"
+
+    # 3. 地图选路（结合避坑铁律：低血量严禁走精英，优先火堆/问号/商店）
+    if "choose_map_node" in avail_types or "map" in avail_types or screen == "MAP":
+        player = state.get("player") or {}
+        hp = int(player.get("hp", player.get("current_hp", 80)) or 80)
+        max_hp = int(player.get("max_hp", 80) or 80)
+        low_hp = (hp / max(1, max_hp)) < 0.45
+        nodes = (state.get("map") or {}).get("next_nodes") or (state.get("map") or {}).get("available_nodes") or []
+        best_i = 0
+        best_score = -999
+        for i, nd in enumerate(nodes):
+            ntype = str(nd.get("type") or nd.get("room_type") or "").lower()
+            if low_hp:
+                sc = {"rest": 100, "rest_site": 100, "unknown": 70, "event": 70, "shop": 60, "treasure": 90, "monster": 40, "elite": -100}.get(ntype, 20)
+            else:
+                sc = {"treasure": 95, "monster": 80, "rest": 75, "rest_site": 75, "unknown": 70, "event": 70, "elite": 65, "shop": 50}.get(ntype, 30)
+            if sc > best_score:
+                best_score = sc
+                best_i = i
+        return f"map {best_i}", f"按攻略路线选择地图节点 {best_i} (血量 {hp}/{max_hp})"
+
+    # 4. 火堆休息处
+    if "rest" in avail_types or screen in ("REST_SITE", "REST"):
+        player = state.get("player") or {}
+        hp = int(player.get("hp", player.get("current_hp", 80)) or 80)
+        max_hp = int(player.get("max_hp", 80) or 80)
+        if (hp / max(1, max_hp)) < 0.70:
+            return "rest 0", f"血量偏低({hp}/{max_hp})，在火堆选择休息回血"
+        return "rest 1; proceed", "血量健康，在火堆锻造升级卡牌"
+
+    # 5. 事件/宝箱/商店/主菜单继续
+    if "choose_event" in avail_types or "event" in avail_types or screen == "EVENT":
+        return "event 0", "选择事件第一项"
+    if "open_chest" in avail_types or screen == "TREASURE":
+        return "open_chest; collect; proceed", "打开宝箱领取遗物"
+    if "proceed" in avail_types or "skip" in avail_types:
+        return "proceed", "推进至下一画面"
+    if screen == "MAIN_MENU":
+        return "continue", "在主菜单继续2号存档战局"
+
+    return None, f"当前界面({screen or 'UNKNOWN'})暂未匹配内置动作"
 
 
 def translate_sts2_log_line(line):
@@ -1141,10 +1351,12 @@ print('INJECTED_OK')
 
 
 def sts2_autoplay_daemon_loop():
-    """后台全自动连续爬塔推进守护线程"""
+    """后台全自动连续爬塔推进守护线程（优先通过游戏内 STS2AIAgent 精准直连出牌，零点击误差）"""
+    unknown_streak = 0
     while True:
-        time.sleep(4.0)
+        time.sleep(1.8)
         if not AUTOPLAY_STATE["active"]:
+            unknown_streak = 0
             continue
         try:
             attach_input_desktop()
@@ -1155,25 +1367,19 @@ def sts2_autoplay_daemon_loop():
                 stop_sts2_autoplay("检测到本机鼠标移至屏幕左上角(0,0)紧急刹车区")
                 continue
 
-            # 2. 检查窗口是否被关闭
+            # 2. 检查游戏进程是否被关闭
             now = time.time()
-            if now - AUTOPLAY_STATE["started_at"] > 30.0:
-                vis = [w.lower() for w in list_visible_windows()]
-                if not any("slay the spire" in w or "杀戮尖塔" in w for w in vis):
-                    stop_sts2_autoplay("检测到《杀戮尖塔2》窗口已关闭")
-                    continue
-
-            # 3. 距离上次推进至少间隔 15 秒
-            if now - AUTOPLAY_STATE["last_push_at"] < 15.0:
+            if now - AUTOPLAY_STATE["started_at"] > 25.0 and not is_sts2_process_running():
+                stop_sts2_autoplay("检测到《杀戮尖塔2》进程已关闭")
                 continue
 
-            # 4. 检查是否产生了新的结束战绩文件 (.run)，若是则触发终局死因复盘并停止循环
+            # 3. 检查是否产生了新的结束战绩文件 (.run)，若是则触发终局死因复盘并停止循环
             cur_runs = list_profile2_history_runs()
             new_runs = sorted(list(cur_runs - AUTOPLAY_STATE["known_runs"]))
             if new_runs:
                 latest_run = new_runs[-1]
                 AUTOPLAY_STATE["known_runs"] = cur_runs
-                focus_window_by_title("Slay the Spire 2")
+                focus_sts2_game_window()
                 img_b64 = capture_screenshot_b64(draw_grid=True)
                 run_summary, killed_by_cn, char_name = parse_finished_run_summary(latest_run)
                 rec_logs = "\n  ".join(get_sts2_recent_logs(16))
@@ -1189,31 +1395,33 @@ def sts2_autoplay_daemon_loop():
                     stop_sts2_autoplay(f"本局已结束并触发终局复盘({os.path.basename(latest_run)})")
                 continue
 
-            # 5. 检查轮数上限
-            if AUTOPLAY_STATE["turn"] >= AUTOPLAY_STATE["max_turns"]:
-                stop_sts2_autoplay(f"已达到单次自动连续爬塔上限({AUTOPLAY_STATE['max_turns']}轮)")
+            # 4. 检查步数上限
+            if AUTOPLAY_STATE["turn"] >= AUTOPLAY_STATE["max_turns"] * 8:
+                stop_sts2_autoplay(f"已达到单次自动连续爬塔步数上限({AUTOPLAY_STATE['turn']}步)")
                 continue
 
-            # 6. 置顶游戏窗口并推进下一回合（无需每一步都截图，直接传后台存档与日志数据）
-            focus_window_by_title("Slay the Spire 2")
-            img_b64 = ""
-            live_rep = get_sts2_live_report()
-            next_turn = AUTOPLAY_STATE["turn"] + 1
-            turn_prompt = (
-                f"【《杀戮尖塔2》全自动连续爬塔推进 第{next_turn}/{AUTOPLAY_STATE['max_turns']}轮（免截图极速模式）】\n"
-                f"{live_rep}\n"
-                f"请立即执行本回合操作：\n"
-                f"1. 不用每一步都截图！请优先根据上方后台实时存档（角色、血量、牌组、遗物、海克斯符文）和 godot.log 最新战斗日志，直接调用 local_pc_control(mode=\"sts2_batch\", send_to_group=false, steps=[...]) 一次性执行本回合整套动作（常用坐标：主菜单『单人模式』x=515,y=515；选人界面『铁甲战士』x=348,y=660，右下角蓝色对勾『启程/开始』x=1220,y=550；先古对话点击底部选项x=640,y=620；海克斯符文三选一卡片分别在x=360,y=420 / x=640,y=420 / x=920,y=420；战斗中按数字键1-9选牌后点击目标怪物x=920,y=420或屏幕中央x=640,y=400，最后按 key=\"e\" 结束回合）；\n"
-                f"2. 仅当你根据日志完全无法判断当前停留在什么特殊弹窗/地图分叉时，才按需调用一次 mode=\"screenshot\", send_to_group=false 查看画面；\n"
-                f"3. 除非本局打完结算或主人主动询问，中间爬塔回合请一律保持群聊静默(silent)，不要每一步都往群里发图或发消息。"
-            )
-            ok_inj, info = inject_cloud_autoplay_turn(turn_prompt, img_b64)
-            if ok_inj:
-                AUTOPLAY_STATE["turn"] = next_turn
+            # 5. 通过 STS2AIAgent 本地精确接口读取实时状态并直接执行动作
+            port, snap = get_sts2_agent_snapshot()
+            if not snap:
+                continue
+
+            action_seq, reason = decide_sts2_smart_action(snap)
+            if action_seq:
+                unknown_streak = 0
+                ok_act, out_act = run_sts2_cli(["act", action_seq, "--mode", "auto", "--reason", reason], timeout_s=20)
+                AUTOPLAY_STATE["turn"] += 1
                 AUTOPLAY_STATE["last_push_at"] = time.time()
-                print(f"[STS2-AUTOPLAY] 已成功推进第 {next_turn}/{AUTOPLAY_STATE['max_turns']} 轮", flush=True)
+                print(f"[STS2-AUTOPLAY] 步{AUTOPLAY_STATE['turn']} [{action_seq}] ({reason}) -> ok={ok_act}", flush=True)
             else:
-                print(f"[STS2-AUTOPLAY] 等待推进第 {next_turn} 轮 ({info})", flush=True)
+                unknown_streak += 1
+                # 兜底处理《海克斯大乱斗》等工坊模组专属三选一弹窗
+                if unknown_streak >= 3:
+                    focus_sts2_game_window()
+                    click_screen(640, 420)
+                    time.sleep(0.5)
+                    click_screen(1100, 580)
+                    unknown_streak = 0
+                    print(f"[STS2-AUTOPLAY] 触发工坊模组弹窗兜底点击 ({reason})", flush=True)
         except Exception as e:
             print(f"[STS2-AUTOPLAY] 循环异常: {e}", flush=True)
 
@@ -1311,22 +1519,53 @@ class BridgeHandler(BaseHTTPRequestHandler):
             action_note = "已截取本地电脑实时画面"
         elif mode == "sts2_status":
             launch_sts2_on_interactive_desktop()
-            action_note = get_sts2_live_report()
+            ok_obs, obs_txt = run_sts2_cli(["observe", "--mode", "auto"])
+            if ok_obs and obs_txt:
+                action_note = f"【STS2AIAgent 零截图精准实时战报】\n{obs_txt}\n\n" + get_sts2_live_report()
+            else:
+                action_note = f"（STS2AIAgent暂未就绪: {obs_txt}，已回退存档面板）\n" + get_sts2_live_report()
             if req.get("autoplay") is not False and not AUTOPLAY_STATE["active"]:
                 start_sts2_autoplay(req.get("max_turns", 25))
-                action_note += "\n（已同步自动挂起后台连续爬塔推进引擎，本轮结束后将自动一回合接一回合连续推进！）"
-        elif mode == "sts2_batch":
+                action_note += "\n（已同步启动基于 STS2AIAgent 精准引擎的后台全自动连续爬塔循环！）"
+        elif mode == "sts2_act":
             launch_sts2_on_interactive_desktop()
-            ok, msg = execute_sts2_batch(
-                req.get("steps", []),
-                req.get("wait_after_ms", 2200),
-            )
+            action_seq = str(req.get("action_seq") or req.get("command") or "").strip()
+            if not action_seq:
+                ok = False
+                err_msg = "sts2_act 需提供 action_seq（例如 'play 0 0; play 2; end' 或 'map 1' 或 'pick_card 0; collect'）"
+            else:
+                ok, msg = run_sts2_cli(["act", action_seq, "--mode", "auto"])
+                if ok:
+                    action_note = f"已通过 STS2AIAgent 精准执行 [{action_seq}]：\n{msg}"
+                else:
+                    err_msg = msg
+        elif mode == "sts2_lookup":
+            kw = str(req.get("keyword") or req.get("command") or "").strip()
+            ok, msg = run_sts2_cli(["lookup", kw])
             if ok:
                 action_note = msg
-                if AUTOPLAY_STATE["active"]:
-                    AUTOPLAY_STATE["last_push_at"] = time.time()
             else:
                 err_msg = msg
+        elif mode == "sts2_batch":
+            launch_sts2_on_interactive_desktop()
+            action_seq = str(req.get("action_seq") or "").strip()
+            if action_seq:
+                ok, msg = run_sts2_cli(["act", action_seq, "--mode", "auto"])
+                if ok:
+                    action_note = f"已通过 STS2AIAgent 精准执行 [{action_seq}]：\n{msg}"
+                else:
+                    err_msg = msg
+            else:
+                ok, msg = execute_sts2_batch(
+                    req.get("steps", []),
+                    req.get("wait_after_ms", 2200),
+                )
+                if ok:
+                    action_note = msg
+                    if AUTOPLAY_STATE["active"]:
+                        AUTOPLAY_STATE["last_push_at"] = time.time()
+                else:
+                    err_msg = msg
         elif mode == "sts2_review":
             ok, msg = update_sts2_review(req)
             if ok:
