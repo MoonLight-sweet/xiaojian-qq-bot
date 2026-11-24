@@ -1006,7 +1006,7 @@ async fn enrich_voice_and_video_messages(
                         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
                     let data_urls = vec![format!("data:image/jpeg;base64,{b64}")];
                     let tags = describer.describe(bot_id, group_id, &data_urls).await;
-                    if let Some(Some(tag)) = tags.into_iter().next() {
+                    if let Some(tag) = tags.into_iter().next() {
                         let mut parts = Vec::new();
                         if !tag.description.trim().is_empty() {
                             parts.push(tag.description.trim().to_string());
