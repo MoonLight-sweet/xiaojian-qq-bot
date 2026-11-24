@@ -1679,8 +1679,8 @@ pub async fn call_study_hub(store: &SqliteStore, scope: &Scope, args: &Value) ->
         Err(e) => return tool_err(format!("创建 HTTP 客户端失败: {e}")),
     };
 
-    let base_url = std::env::var("STUDY_HUB_INTERNAL_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:18086".into());
+    let base_url =
+        std::env::var("STUDY_HUB_INTERNAL_URL").unwrap_or_else(|_| "http://127.0.0.1:18086".into());
     let resp = match client
         .post(format!("{}{}", base_url.trim_end_matches('/'), endpoint))
         .header("X-Study-Token", "xiaojian-study-hub-2026")
@@ -1752,7 +1752,9 @@ pub async fn call_study_hub(store: &SqliteStore, scope: &Scope, args: &Value) ->
         }
         "get_plan" => {
             if body.get("found").and_then(Value::as_bool) != Some(true) {
-                return tool_ok("当前还没有创建过学习计划，可以直接调用 mode=\"create_plan\" 为对方量身定制一份。");
+                return tool_ok(
+                    "当前还没有创建过学习计划，可以直接调用 mode=\"create_plan\" 为对方量身定制一份。",
+                );
             }
             let title = body.get("title").and_then(Value::as_str).unwrap_or("");
             let done = body.get("done").and_then(Value::as_i64).unwrap_or(0);
@@ -1777,7 +1779,10 @@ pub async fn call_study_hub(store: &SqliteStore, scope: &Scope, args: &Value) ->
                 return tool_ok("当前还没有测验记录，可以调用 mode=\"create_quiz\" 出一套测验题。");
             }
             let title = body.get("title").and_then(Value::as_str).unwrap_or("");
-            let answered = body.get("answered_count").and_then(Value::as_i64).unwrap_or(0);
+            let answered = body
+                .get("answered_count")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
             let score = body.get("score").and_then(Value::as_i64).unwrap_or(0);
             let total = body.get("total").and_then(Value::as_i64).unwrap_or(0);
             let wrongs = body

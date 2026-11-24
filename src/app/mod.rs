@@ -516,12 +516,7 @@ async fn proxy_study_hub(
                 .unwrap_or("text/html; charset=utf-8")
                 .to_string();
             let bytes = resp.bytes().await.unwrap_or_default();
-            (
-                status,
-                [(axum::http::header::CONTENT_TYPE, ct)],
-                bytes,
-            )
-                .into_response()
+            (status, [(axum::http::header::CONTENT_TYPE, ct)], bytes).into_response()
         }
         Err(e) => (
             axum::http::StatusCode::BAD_GATEWAY,
@@ -532,7 +527,6 @@ async fn proxy_study_hub(
 }
 
 impl App {
-
     /// Spawn the OneBot supervisor, the flush loop, health refresh and the admin server.
     pub async fn serve(self: Arc<Self>) -> BotResult<()> {
         // Quota cache warmup: the first scrape takes tens of seconds, so it

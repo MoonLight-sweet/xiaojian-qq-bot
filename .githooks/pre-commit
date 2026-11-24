@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+set -e
+
+# 仅在本次提交包含 Rust 源码改动时自动执行格式整理与校验
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
+if [ -n "$STAGED_RS" ]; then
+    if command -v cargo >/dev/null 2>&1; then
+        echo "[pre-commit] 检测到 Rust 代码改动，自动运行 cargo fmt 统一格式..."
+        cargo fmt
+        git add $STAGED_RS
+        cargo fmt --check
+        echo "[pre-commit] 代码格式校验通过。"
+    else
+        echo "[pre-commit] 警告：未找到 cargo，跳过自动格式整理。"
+    fi
+fi
