@@ -72,21 +72,34 @@ def main():
         ex_style | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080,
     )
 
-    def tick():
+    def is_sts2_foreground():
         try:
-            # 保持强制置顶（防止全屏游戏盖住）
-            ctypes.windll.user32.SetWindowPos(hwnd, -1, x, y, w, h, 0x0010 | 0x0040)
+            fg = ctypes.windll.user32.GetForegroundWindow()
+            if not fg:
+                return False
+            buf = ctypes.create_unicode_buffer(256)
+            ctypes.windll.user32.GetWindowTextW(fg, buf, 256)
+            title = (buf.value or "").strip()
+            tl = title.lower()
+            if title == "Slay the Spire 2":
+                return True
+            if ("slay the spire 2" in tl or "杀戮尖塔2" in tl) and not any(
+                b in tl for b in ("chrome", "edge", "firefox", "github", "vscode", "antigravity")
+            ):
+                return True
+            return False
         except Exception:
-            pass
+            return False
 
+    def tick():
         color = "#F59E0B"
         text = "小简状态条在线 | 等待指令..."
-        visible = True
+        visible = False
         try:
             if os.path.exists(STATE_FILE):
                 with open(STATE_FILE, "r", encoding="utf-8") as f:
                     st = json.load(f)
-                visible = bool(st.get("visible", True))
+                visible = bool(st.get("visible", False))
                 color = str(st.get("color") or "#10B981")
                 text = str(st.get("text") or text)
                 updated_at = float(st.get("updated_at") or 0)
@@ -98,9 +111,16 @@ def main():
         except Exception:
             pass
 
-        if visible:
+        # 仅在《杀戮尖塔2》处于前台打开状态时显示状态条；切到其他软件或关闭游戏后自动隐藏
+        should_show = visible and is_sts2_foreground()
+
+        if should_show:
             if root.state() == "withdrawn":
                 root.deiconify()
+            try:
+                ctypes.windll.user32.SetWindowPos(hwnd, -1, x, y, w, h, 0x0010 | 0x0040)
+            except Exception:
+                pass
             canvas.itemconfig(dot, fill=color)
             lbl.config(text=text)
         else:
