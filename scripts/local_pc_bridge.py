@@ -896,12 +896,17 @@ def decide_sts2_smart_action(snap, skip_cids=None):
             return "proceed", "战利品领取完毕，前进至地图"
         return "collect", "自动领取全部战利品并前进"
 
-    # 3. 选牌/删牌/升级弹窗 (CARD_SELECTION)
+    # 3. 选牌/删牌/升级/弃牌弹窗 (CARD_SELECTION)
     if screen == "CARD_SELECTION" or "select_deck_card" in avail_names:
         sel = state.get("selection") or {}
-        if sel.get("confirm") or sel.get("can_confirm"):
-            return "confirm", "确认选牌"
-        return "select_card 0", "选择第一张候选卡牌"
+        if sel.get("confirm") or sel.get("can_confirm") or "confirm_selection" in avail_names:
+            return "confirm", "确认已选卡牌"
+        cards = sel.get("cards") or []
+        for idx, c in enumerate(cards):
+            if not c.get("selected"):
+                ci = int(c.get("i", c.get("index", idx)))
+                return f"select_deck_card {ci}", f"选择第{ci + 1}张候选卡牌"
+        return "select_deck_card 0", "选择第一张候选卡牌"
 
     # 4. 地图选路（结合避坑铁律：低血量严禁走精英，优先火堆/问号/商店）
     if screen == "MAP" or "choose_map_node" in avail_names:
