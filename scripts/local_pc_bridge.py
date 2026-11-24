@@ -766,8 +766,9 @@ def _parse_hp_pair(hp_val, default_cur=80, default_max=80):
     return default_cur, default_max
 
 
-def decide_sts2_smart_action(snap):
+def decide_sts2_smart_action(snap, skip_cids=None):
     """基于 STS2AIAgent 精确内存状态，为本地自动爬塔生成 100% 精准的动作序列（零坐标误差，兼容全部工坊模组）"""
+    skip_cids = skip_cids or set()
     state = snap.get("state") or snap
     avail = snap.get("available_actions") or state.get("available_actions") or []
     screen = str(state.get("screen") or state.get("screen_type") or "").upper()
@@ -816,10 +817,14 @@ def decide_sts2_smart_action(snap):
                 continue
             cid_num = c.get("cid")
             card_ref = f"cid:{cid_num}" if cid_num is not None else str(c.get("i", idx))
+            if card_ref in skip_cids:
+                continue
             ctype = str(c.get("type") or "").lower()
             card_id = str(c.get("card_id") or c.get("id") or "").upper()
             vs_list = c.get("vs") or []
-            needs_target = len(vs_list) > 0
+            targets_list = [int(t) for t in (c.get("targets") or []) if str(t).isdigit()]
+            needs_target = (len(targets_list) > 0) or (len(vs_list) > 0)
+            chosen_target = default_target if (default_target in targets_list or not targets_list) else targets_list[0]
             is_block = ("DEFEND" in card_id or "SHIELD" in card_id or "BLOCK" in card_id or (ctype == "skill" and not needs_target and "格挡" in str(c.get("line") or "")))
             is_vuln = ("BASH" in card_id or "TREMBLE" in card_id or "易伤" in str(c.get("line") or ""))
             kill_targets = [
@@ -828,7 +833,8 @@ def decide_sts2_smart_action(snap):
             ]
             playable.append({
                 "ref": card_ref, "cost": cost, "type": ctype, "card_id": card_id,
-                "needs_target": needs_target, "is_block": is_block, "is_vuln": is_vuln,
+                "needs_target": needs_target, "chosen_target": chosen_target,
+                "is_block": is_block, "is_vuln": is_vuln,
                 "kill_targets": kill_targets,
             })
 
@@ -840,34 +846,40 @@ def decide_sts2_smart_action(snap):
             attacking_kills = [ti for ti in p["kill_targets"] if enemy_by_i[ti]["dmg"] > 0]
             if attacking_kills:
                 ti = attacking_kills[0]
-                return f"play {p['ref']} {ti}", f"精准打出 {p['card_id']} 直接斩杀正在攻击的 {enemy_by_i[ti]['name']}"
+                return f"play {p['ref']} {ti}", f"精准打出 {p['card_id']} 斩杀 {enemy_by_i[ti]['name']}"
 
         # 策略2：有护甲缺口时优先叠甲防御
         if incoming_dmg > block:
             blocks = [p for p in playable if p["is_block"]]
             if blocks:
                 b = blocks[0]
-                return f"play {b['ref']}", f"来袭总伤{incoming_dmg}>当前护甲{block}，优先打出 {b['card_id']} 叠甲"
+                return f"play {b['ref']}", f"来袭伤{incoming_dmg}>护甲{block}，打出 {b['card_id']} 叠甲"
 
-        # 策略3：任意斩杀 -> 易伤 -> 能力牌 -> 攻击牌 -> 其余技能牌
+        # 策略3：任意斩杀 -> 易伤 -> 能力牌 -> 攻击牌 -> 其余技能牌（跳过纯空打的防御牌当来袭伤=0）
         for p in playable:
             if p["kill_targets"]:
                 ti = p["kill_targets"][0]
                 return f"play {p['ref']} {ti}", f"精准斩杀 {enemy_by_i[ti]['name']}"
 
+        non_idle_blocks = [p for p in playable if not (incoming_dmg == 0 and p["is_block"])]
+        if not non_idle_blocks:
+            return "end", "敌方本回合无攻击且无输出牌，结束回合"
+
         chosen = None
         for bucket in (
-            [p for p in playable if p["is_vuln"]],
-            [p for p in playable if p["type"] == "power"],
-            [p for p in playable if p["type"] == "attack"],
-            playable,
+            [p for p in non_idle_blocks if p["is_vuln"]],
+            [p for p in non_idle_blocks if p["type"] == "power"],
+            [p for p in non_idle_blocks if p["type"] == "attack"],
+            non_idle_blocks,
         ):
             if bucket:
                 chosen = bucket[0]
                 break
 
         if chosen["needs_target"]:
-            return f"play {chosen['ref']} {default_target}", f"精准打出 {chosen['card_id']} 集火 {enemy_by_i[default_target]['name']}"
+            ti = chosen["chosen_target"]
+            tname = enemy_by_i.get(ti, {}).get("name", f"{ti}号目标")
+            return f"play {chosen['ref']} {ti}", f"精准打出 {chosen['card_id']} -> {tname}"
         return f"play {chosen['ref']}", f"精准打出 {chosen['card_id']}"
 
     # 2. 战利品与选牌（兼容海克斯大乱斗“锻体”等模组奖励）
@@ -1416,13 +1428,103 @@ print('INJECTED_OK')
         return False, str(e)
 
 
+HUD_STATE = {
+    "visible": False,
+    "color": "#10B981",  # 绿=#10B981(运行中) 黄=#F59E0B(等待/兜底) 红=#EF4444(断开/停止)
+    "text": "小简自动爬塔未启动",
+}
+
+
+def update_sts2_hud(visible, color, text):
+    HUD_STATE["visible"] = bool(visible)
+    HUD_STATE["color"] = color
+    HUD_STATE["text"] = text
+
+
+def sts2_hud_overlay_thread():
+    """在屏幕顶部中央绘制置顶、半透明、鼠标完全穿透的实时状态标识条，方便一眼看清运行/断开状态"""
+    try:
+        import tkinter as tk
+    except Exception:
+        return
+    try:
+        root = tk.Tk()
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        root.attributes("-alpha", 0.86)
+        root.configure(bg="#111827")
+
+        sw = root.winfo_screenwidth()
+        w, h = 640, 34
+        x = max(0, (sw - w) // 2)
+        y = 6
+        root.geometry(f"{w}x{h}+{x}+{y}")
+
+        canvas = tk.Canvas(root, width=20, height=20, bg="#111827", highlightthickness=0)
+        canvas.pack(side="left", padx=(12, 4), pady=7)
+        dot = canvas.create_oval(4, 4, 16, 16, fill="#10B981", outline="")
+
+        lbl = tk.Label(
+            root,
+            text="",
+            fg="#F8FAFC",
+            bg="#111827",
+            font=("Microsoft YaHei UI", 10, "bold"),
+            anchor="w",
+        )
+        lbl.pack(side="left", fill="x", expand=True, padx=(0, 12))
+
+        root.update_idletasks()
+        # 设置鼠标完全穿透 + 不抢前台焦点 (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+        GWL_EXSTYLE = -20
+        ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ctypes.windll.user32.SetWindowLongW(
+            hwnd,
+            GWL_EXSTYLE,
+            ex_style | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080,
+        )
+        root.withdraw()
+
+        last_vis = False
+
+        def tick():
+            nonlocal last_vis
+            vis = HUD_STATE["visible"]
+            if vis:
+                if not last_vis:
+                    root.deiconify()
+                    last_vis = True
+                canvas.itemconfig(dot, fill=HUD_STATE["color"])
+                lbl.config(text=HUD_STATE["text"])
+            else:
+                if last_vis:
+                    root.withdraw()
+                    last_vis = False
+            root.after(300, tick)
+
+        root.after(300, tick)
+        root.mainloop()
+    except Exception as e:
+        print(f"[STS2-HUD] 悬浮状态条初始化跳过: {e}", flush=True)
+
+
 def sts2_autoplay_daemon_loop():
-    """后台全自动连续爬塔推进守护线程（优先通过游戏内 STS2AIAgent 精准直连出牌，零点击误差）"""
+    """后台全自动连续爬塔推进守护线程（优先通过游戏内 STS2AIAgent 精准直连出牌，带桌面实时状态条与防卡死熔断）"""
+    threading.Thread(target=sts2_hud_overlay_thread, daemon=True).start()
     unknown_streak = 0
+    disconnect_streak = 0
+    last_action_sig = ""
+    repeat_count = 0
+    skip_cids = set()
+    last_turn_key = ""
+
     while True:
-        time.sleep(1.8)
+        time.sleep(1.5)
         if not AUTOPLAY_STATE["active"]:
             unknown_streak = 0
+            disconnect_streak = 0
+            skip_cids.clear()
             continue
         try:
             attach_input_desktop()
@@ -1430,13 +1532,15 @@ def sts2_autoplay_daemon_loop():
             pt = ctypes.wintypes.POINT()
             ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
             if pt.x <= 15 and pt.y <= 15:
-                stop_sts2_autoplay("检测到本机鼠标移至屏幕左上角(0,0)紧急刹车区")
+                stop_sts2_autoplay("鼠标移至左上角紧急刹车")
+                update_sts2_hud(True, "#EF4444", "小简自动爬塔已停止 | 原因：鼠标移至左上角紧急刹车")
                 continue
 
             # 2. 检查游戏进程是否被关闭
             now = time.time()
             if now - AUTOPLAY_STATE["started_at"] > 25.0 and not is_sts2_process_running():
-                stop_sts2_autoplay("检测到《杀戮尖塔2》进程已关闭")
+                stop_sts2_autoplay("《杀戮尖塔2》进程已关闭")
+                update_sts2_hud(True, "#EF4444", "小简自动爬塔已断开 | 原因：游戏进程已关闭")
                 continue
 
             # 3. 检查是否产生了新的结束战绩文件 (.run)，若是则触发终局死因复盘并停止循环
@@ -1459,29 +1563,64 @@ def sts2_autoplay_daemon_loop():
                 ok_inj, info = inject_cloud_autoplay_turn(review_prompt, img_b64)
                 if ok_inj:
                     stop_sts2_autoplay(f"本局已结束并触发终局复盘({os.path.basename(latest_run)})")
+                    update_sts2_hud(True, "#EF4444", f"小简本局已结束 | 已自动触发死因复盘发群")
                 continue
 
             # 4. 检查步数上限
-            if AUTOPLAY_STATE["turn"] >= AUTOPLAY_STATE["max_turns"] * 8:
-                stop_sts2_autoplay(f"已达到单次自动连续爬塔步数上限({AUTOPLAY_STATE['turn']}步)")
+            if AUTOPLAY_STATE["turn"] >= AUTOPLAY_STATE["max_turns"] * 12:
+                stop_sts2_autoplay(f"已达单次步数上限({AUTOPLAY_STATE['turn']}步)")
+                update_sts2_hud(True, "#EF4444", f"小简自动爬塔已暂停 | 已达单次步数上限({AUTOPLAY_STATE['turn']}步)")
                 continue
 
             # 5. 通过 STS2AIAgent 本地精确接口读取实时状态并直接执行动作
             port, snap = get_sts2_agent_snapshot()
             if not snap:
+                disconnect_streak += 1
+                if disconnect_streak >= 3:
+                    update_sts2_hud(True, "#EF4444", f"小简与游戏模组断开连接 ({time.strftime('%H:%M:%S')}) | 等待恢复...")
                 continue
+            disconnect_streak = 0
 
-            action_seq, reason = decide_sts2_smart_action(snap)
+            st = snap.get("state") or {}
+            floor_num = (st.get("run") or {}).get("floor", "?")
+            turn_key = f"{st.get('screen')}_{floor_num}_{st.get('turn')}"
+            if turn_key != last_turn_key:
+                skip_cids.clear()
+                last_turn_key = turn_key
+                repeat_count = 0
+
+            action_seq, reason = decide_sts2_smart_action(snap, skip_cids=skip_cids)
             if action_seq:
                 unknown_streak = 0
+                # 防卡死熔断：若同一动作连续执行2次仍停在同一状态，自动跳过该卡或结束回合
+                combat = st.get("combat") or {}
+                cur_sig = f"{action_seq}|e={(combat.get('player') or {}).get('energy')}|h={len(combat.get('hand') or [])}"
+                if cur_sig == last_action_sig:
+                    repeat_count += 1
+                else:
+                    last_action_sig = cur_sig
+                    repeat_count = 0
+
+                if repeat_count >= 2:
+                    toks = action_seq.split()
+                    if len(toks) >= 2 and toks[0] == "play":
+                        skip_cids.add(toks[1])
+                        print(f"[STS2-AUTOPLAY] 熔断跳过卡死卡牌 {toks[1]}", flush=True)
+                        update_sts2_hud(True, "#F59E0B", f"小简自动爬塔中 | 第{floor_num}层 | 自动跳过异常卡牌 {toks[1]}")
+                        repeat_count = 0
+                        continue
+
+                now_hms = time.strftime("%H:%M:%S")
+                update_sts2_hud(True, "#10B981", f"小简自动爬塔中 | 第{floor_num}层 | {reason[:24]} ({now_hms})")
                 ok_act, out_act = run_sts2_cli(["act", action_seq, "--mode", "auto", "--reason", reason], timeout_s=20)
                 AUTOPLAY_STATE["turn"] += 1
                 AUTOPLAY_STATE["last_push_at"] = time.time()
                 print(f"[STS2-AUTOPLAY] 步{AUTOPLAY_STATE['turn']} [{action_seq}] ({reason}) -> ok={ok_act}", flush=True)
             else:
                 unknown_streak += 1
-                # 兜底处理《海克斯大乱斗》等工坊模组专属三选一弹窗
-                if unknown_streak >= 3:
+                update_sts2_hud(True, "#F59E0B", f"小简等待界面 | {reason[:30]} ({time.strftime('%H:%M:%S')})")
+                # 兜底处理《海克斯大乱斗》等工坊模组专属三选一弹窗（排除设置界面避免误点）
+                if unknown_streak >= 3 and str(st.get("screen") or "").upper() != "SETTINGS":
                     focus_sts2_game_window()
                     click_screen(640, 420)
                     time.sleep(0.5)
@@ -1489,6 +1628,7 @@ def sts2_autoplay_daemon_loop():
                     unknown_streak = 0
                     print(f"[STS2-AUTOPLAY] 触发工坊模组弹窗兜底点击 ({reason})", flush=True)
         except Exception as e:
+            update_sts2_hud(True, "#EF4444", f"小简自动爬塔异常 | {str(e)[:32]}")
             print(f"[STS2-AUTOPLAY] 循环异常: {e}", flush=True)
 
 
