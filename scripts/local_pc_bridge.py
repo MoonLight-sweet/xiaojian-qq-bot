@@ -741,139 +741,205 @@ def run_sts2_cli(cli_args, timeout_s=25):
 
 
 def get_sts2_agent_snapshot():
-    """直接读取游戏内 STS2AIAgent 本地接口的原始 JSON 决策快照（自动探测 8080/8081 等端口）"""
+    """直接读取游戏内 STS2AIAgent 本地接口的原始 JSON 决策快照（自动探测端口并解包 data 层）"""
     import urllib.request
 
-    for port in (8080, 8081, 8082, 18080):
+    for port in (8081, 8080, 8082, 18080):
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/decision-snapshot", timeout=2.5) as r:
                 if r.status == 200:
-                    data = json.loads(r.read().decode("utf-8", "ignore"))
+                    raw = json.loads(r.read().decode("utf-8", "ignore"))
+                    data = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else raw
                     return port, data
         except Exception:
             continue
     return None, None
 
 
-def decide_sts2_smart_action(snap):
-    """基于 STS2AIAgent 精确内存状态，为本地自动爬塔生成 100% 精准的动作序列（零坐标误差）"""
-    state = snap.get("state") or snap
-    avail = snap.get("available_actions") or []
-    screen = str(state.get("screen_type") or state.get("screen") or "").upper()
-    avail_types = {str(a.get("type") or a.get("action") or "").lower() for a in avail if isinstance(a, dict)}
+def _parse_hp_pair(hp_val, default_cur=80, default_max=80):
+    if isinstance(hp_val, str) and "/" in hp_val:
+        try:
+            a, b = hp_val.split("/", 1)
+            return int(a.strip()), int(b.strip())
+        except Exception:
+            pass
+    return default_cur, default_max
 
-    # 1. 战斗画面：精准计算来袭伤害、护甲缺口与集火目标
-    if screen == "COMBAT" or "play_card" in avail_types or "end_turn" in avail_types:
-        combat = state.get("combat") or state
-        player = combat.get("player") or state.get("player") or {}
+
+def decide_sts2_smart_action(snap):
+    """基于 STS2AIAgent 精确内存状态，为本地自动爬塔生成 100% 精准的动作序列（零坐标误差，兼容全部工坊模组）"""
+    state = snap.get("state") or snap
+    avail = snap.get("available_actions") or state.get("available_actions") or []
+    screen = str(state.get("screen") or state.get("screen_type") or "").upper()
+    avail_names = {
+        str(a.get("name") or a.get("type") or a.get("action") or "").lower()
+        if isinstance(a, dict) else str(a).lower()
+        for a in avail
+    }
+
+    # 1. 战斗画面：精准计算来袭伤害、护甲缺口、斩杀机会与手牌 cid
+    if screen == "COMBAT" or "play_card" in avail_names or "end_turn" in avail_names:
+        combat = state.get("combat") or {}
+        player = combat.get("player") or {}
         energy = int(player.get("energy", 0) or 0)
         block = int(player.get("block", 0) or 0)
         hand = combat.get("hand") or []
-        enemies = [
-            (i, e) for i, e in enumerate(combat.get("enemies") or [])
-            if int(e.get("hp", e.get("current_hp", 0)) or 0) > 0 and not e.get("is_dead")
-        ]
+        raw_enemies = combat.get("enemies") or []
+        enemies = []
+        for idx, e in enumerate(raw_enemies):
+            if e.get("alive") is False or e.get("hittable") is False:
+                continue
+            ehp, _ = _parse_hp_pair(e.get("hp"), 99, 99)
+            if ehp <= 0:
+                continue
+            edmg = sum(int(it.get("total_damage") or it.get("damage") or 0) for it in (e.get("intents") or []))
+            enemies.append({"i": int(e.get("i", idx)), "hp": ehp, "dmg": edmg, "name": e.get("name", "")})
+
         if not enemies:
             return "end", "场上无存活敌人，结束回合"
 
-        # 计算本回合怪物总来袭伤害
-        incoming_dmg = 0
-        for _, e in enemies:
-            intent = e.get("intent") or {}
-            dmg = int(intent.get("damage", e.get("intent_damage", 0)) or 0)
-            hits = int(intent.get("hits", intent.get("times", 1)) or 1)
-            if dmg > 0:
-                incoming_dmg += dmg * max(1, hits)
-
-        # 优先集火血量最低的存活怪
-        enemies.sort(key=lambda pair: int(pair[1].get("hp", pair[1].get("current_hp", 999)) or 999))
-        target_idx = enemies[0][0]
+        incoming_dmg = sum(e["dmg"] for e in enemies)
+        enemy_by_i = {e["i"]: e for e in enemies}
+        # 默认优先集火血量最低的敌人
+        enemies_sorted = sorted(enemies, key=lambda e: (e["hp"], -e["dmg"]))
+        default_target = enemies_sorted[0]["i"]
 
         playable = []
         for idx, c in enumerate(hand):
             if c.get("playable") is False or c.get("is_playable") is False:
                 continue
-            cost = int(c.get("cost", 1) if c.get("cost") is not None else 1)
+            cost = c.get("energy_cost")
+            if cost is None:
+                cost = c.get("cost", 1)
+            cost = int(cost)
             if cost < 0 or cost > energy:
                 continue
+            cid_num = c.get("cid")
+            card_ref = f"cid:{cid_num}" if cid_num is not None else str(c.get("i", idx))
             ctype = str(c.get("type") or "").lower()
-            cid = str(c.get("id") or c.get("name") or "").upper()
-            needs_target = bool(c.get("requires_target") or c.get("has_target") or str(c.get("target_type") or "").lower() in ("enemy", "single_enemy", "any_enemy"))
-            is_block = ("DEFEND" in cid or "SHIELD" in cid or "BLOCK" in cid or (ctype == "skill" and not needs_target))
-            is_vuln = ("BASH" in cid or "痛击" in cid or "TREMBLE" in cid or "战栗" in cid)
-            playable.append((idx, cost, ctype, needs_target, is_block, is_vuln, cid))
+            card_id = str(c.get("card_id") or c.get("id") or "").upper()
+            vs_list = c.get("vs") or []
+            needs_target = len(vs_list) > 0
+            is_block = ("DEFEND" in card_id or "SHIELD" in card_id or "BLOCK" in card_id or (ctype == "skill" and not needs_target and "格挡" in str(c.get("line") or "")))
+            is_vuln = ("BASH" in card_id or "TREMBLE" in card_id or "易伤" in str(c.get("line") or ""))
+            kill_targets = [
+                int(v["enemy"]) for v in vs_list
+                if v.get("kills") and int(v["enemy"]) in enemy_by_i
+            ]
+            playable.append({
+                "ref": card_ref, "cost": cost, "type": ctype, "card_id": card_id,
+                "needs_target": needs_target, "is_block": is_block, "is_vuln": is_vuln,
+                "kill_targets": kill_targets,
+            })
 
         if not playable:
             return "end", "手牌无可用牌，结束回合"
 
-        need_block = incoming_dmg > block + 3
-        chosen = None
-        if need_block:
-            blocks = [p for p in playable if p[4]]
+        # 策略1：优先一发斩杀正在攻击我们的怪物，直接减少来袭伤害
+        for p in playable:
+            attacking_kills = [ti for ti in p["kill_targets"] if enemy_by_i[ti]["dmg"] > 0]
+            if attacking_kills:
+                ti = attacking_kills[0]
+                return f"play {p['ref']} {ti}", f"精准打出 {p['card_id']} 直接斩杀正在攻击的 {enemy_by_i[ti]['name']}"
+
+        # 策略2：有护甲缺口时优先叠甲防御
+        if incoming_dmg > block:
+            blocks = [p for p in playable if p["is_block"]]
             if blocks:
-                chosen = blocks[0]
-        if chosen is None:
-            # 优先挂易伤 / 能力牌 / 攻击牌
-            vulns = [p for p in playable if p[5]]
-            powers = [p for p in playable if p[2] == "power"]
-            attacks = [p for p in playable if p[2] == "attack"]
-            if vulns:
-                chosen = vulns[0]
-            elif powers:
-                chosen = powers[0]
-            elif attacks:
-                chosen = attacks[0]
-            else:
-                chosen = playable[0]
+                b = blocks[0]
+                return f"play {b['ref']}", f"来袭总伤{incoming_dmg}>当前护甲{block}，优先打出 {b['card_id']} 叠甲"
 
-        c_idx, _, _, needs_target, _, _, cid = chosen
-        if needs_target:
-            return f"play {c_idx} {target_idx}", f"精准打出 {cid} 攻击 {target_idx}号目标"
-        return f"play {c_idx}", f"精准打出 {cid}"
+        # 策略3：任意斩杀 -> 易伤 -> 能力牌 -> 攻击牌 -> 其余技能牌
+        for p in playable:
+            if p["kill_targets"]:
+                ti = p["kill_targets"][0]
+                return f"play {p['ref']} {ti}", f"精准斩杀 {enemy_by_i[ti]['name']}"
 
-    # 2. 战利品与卡牌三选一
-    if "pick_card" in avail_types or screen in ("CARD_REWARD", "CARD_SELECT"):
-        return "pick_card 0; collect", "选择第一张奖励卡牌并自动领取战利品"
-    if "collect_reward" in avail_types or "collect" in avail_types or screen == "REWARDS":
-        return "collect; proceed", "自动领取全部战利品并前进"
+        chosen = None
+        for bucket in (
+            [p for p in playable if p["is_vuln"]],
+            [p for p in playable if p["type"] == "power"],
+            [p for p in playable if p["type"] == "attack"],
+            playable,
+        ):
+            if bucket:
+                chosen = bucket[0]
+                break
 
-    # 3. 地图选路（结合避坑铁律：低血量严禁走精英，优先火堆/问号/商店）
-    if "choose_map_node" in avail_types or "map" in avail_types or screen == "MAP":
-        player = state.get("player") or {}
-        hp = int(player.get("hp", player.get("current_hp", 80)) or 80)
-        max_hp = int(player.get("max_hp", 80) or 80)
+        if chosen["needs_target"]:
+            return f"play {chosen['ref']} {default_target}", f"精准打出 {chosen['card_id']} 集火 {enemy_by_i[default_target]['name']}"
+        return f"play {chosen['ref']}", f"精准打出 {chosen['card_id']}"
+
+    # 2. 战利品与选牌（兼容海克斯大乱斗“锻体”等模组奖励）
+    if screen == "REWARD" or "claim_reward" in avail_names or "choose_reward_card" in avail_names:
+        rw = state.get("reward") or {}
+        if rw.get("pending_card_choice") or "choose_reward_card" in avail_names:
+            return "pick_card 0", "从三张奖励卡中选择第1张"
+        items = rw.get("rewards") or []
+        for r in items:
+            if r.get("claimable", True):
+                r_idx = int(r.get("i", r.get("index", 0)))
+                return f"reward {r_idx}", f"领取战利品[{r_idx}]"
+        if rw.get("can_proceed") or "proceed" in avail_names:
+            return "proceed", "战利品领取完毕，前进至地图"
+        return "collect", "自动领取全部战利品并前进"
+
+    # 3. 选牌/删牌/升级弹窗 (CARD_SELECTION)
+    if screen == "CARD_SELECTION" or "select_deck_card" in avail_names:
+        sel = state.get("selection") or {}
+        if sel.get("confirm") or sel.get("can_confirm"):
+            return "confirm", "确认选牌"
+        return "select_card 0", "选择第一张候选卡牌"
+
+    # 4. 地图选路（结合避坑铁律：低血量严禁走精英，优先火堆/问号/商店）
+    if screen == "MAP" or "choose_map_node" in avail_names:
+        run = state.get("run") or {}
+        hp, max_hp = _parse_hp_pair(run.get("hp"), 80, 80)
         low_hp = (hp / max(1, max_hp)) < 0.45
-        nodes = (state.get("map") or {}).get("next_nodes") or (state.get("map") or {}).get("available_nodes") or []
+        m = state.get("map") or {}
+        nodes = m.get("options") or m.get("available_nodes") or []
         best_i = 0
         best_score = -999
-        for i, nd in enumerate(nodes):
-            ntype = str(nd.get("type") or nd.get("room_type") or "").lower()
+        for idx, nd in enumerate(nodes):
+            ni = int(nd.get("i", nd.get("index", idx)))
+            ntype = str(nd.get("node_type") or nd.get("type") or nd.get("line") or "").lower()
             if low_hp:
-                sc = {"rest": 100, "rest_site": 100, "unknown": 70, "event": 70, "shop": 60, "treasure": 90, "monster": 40, "elite": -100}.get(ntype, 20)
+                sc = 100 if "rest" in ntype else (90 if "treasure" in ntype else (70 if ("unknown" in ntype or "event" in ntype) else (60 if "shop" in ntype else (-100 if "elite" in ntype else 40))))
             else:
-                sc = {"treasure": 95, "monster": 80, "rest": 75, "rest_site": 75, "unknown": 70, "event": 70, "elite": 65, "shop": 50}.get(ntype, 30)
+                sc = 95 if "treasure" in ntype else (85 if "monster" in ntype else (75 if "rest" in ntype else (70 if ("unknown" in ntype or "event" in ntype) else (65 if "elite" in ntype else 50))))
             if sc > best_score:
                 best_score = sc
-                best_i = i
+                best_i = ni
         return f"map {best_i}", f"按攻略路线选择地图节点 {best_i} (血量 {hp}/{max_hp})"
 
-    # 4. 火堆休息处
-    if "rest" in avail_types or screen in ("REST_SITE", "REST"):
-        player = state.get("player") or {}
-        hp = int(player.get("hp", player.get("current_hp", 80)) or 80)
-        max_hp = int(player.get("max_hp", 80) or 80)
+    # 5. 火堆休息处（兼容海克斯“添柴”删牌）
+    if screen == "REST" or "choose_rest_option" in avail_names:
+        run = state.get("run") or {}
+        hp, max_hp = _parse_hp_pair(run.get("hp"), 80, 80)
+        opts = (state.get("rest") or {}).get("options") or []
         if (hp / max(1, max_hp)) < 0.70:
-            return "rest 0", f"血量偏低({hp}/{max_hp})，在火堆选择休息回血"
-        return "rest 1; proceed", "血量健康，在火堆锻造升级卡牌"
+            for o in opts:
+                if (o.get("enabled", True)) and "heal" in str(o.get("option_id") or "").lower():
+                    return f"rest {o.get('i', 0)}", f"血量偏低({hp}/{max_hp})，在火堆休息回血"
+        for o in opts:
+            if o.get("enabled", True):
+                return f"rest {o.get('i', 0)}", f"在火堆执行 {o.get('option_id') or o.get('title')}"
+        return "proceed", "离开火堆"
 
-    # 5. 事件/宝箱/商店/主菜单继续
-    if "choose_event" in avail_types or "event" in avail_types or screen == "EVENT":
+    # 6. 事件/宝箱/商店/弹窗/主菜单
+    if screen == "EVENT" or "choose_event_option" in avail_names:
+        opts = (state.get("event") or {}).get("options") or []
+        for o in opts:
+            if not o.get("locked") and not o.get("kill"):
+                return f"event {o.get('i', 0)}", f"选择安全事件选项 {o.get('i', 0)}"
         return "event 0", "选择事件第一项"
-    if "open_chest" in avail_types or screen == "TREASURE":
+    if screen == "CHEST" or "open_chest" in avail_names:
         return "open_chest; collect; proceed", "打开宝箱领取遗物"
-    if "proceed" in avail_types or "skip" in avail_types:
+    if screen == "MODAL":
+        return "modal confirm", "确认弹窗"
+    if "proceed" in avail_names:
         return "proceed", "推进至下一画面"
-    if screen == "MAIN_MENU":
+    if screen == "MAIN_MENU" and "continue_run" in avail_names:
         return "continue", "在主菜单继续2号存档战局"
 
     return None, f"当前界面({screen or 'UNKNOWN'})暂未匹配内置动作"
