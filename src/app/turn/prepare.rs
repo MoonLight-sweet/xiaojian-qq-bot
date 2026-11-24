@@ -252,6 +252,16 @@ impl TurnExecutor {
             return Err(TurnResult::BadOutput);
         }
 
+        // 3.35 轻量识别群内语音与短视频（语音离线转写 + 短视频抽4格关键帧送视觉模型并听音轨）
+        enrich_voice_and_video_messages(
+            &mut messages,
+            &self.connection,
+            self.image_describer.as_deref(),
+            &self.bot_id,
+            &job.group_id,
+        )
+        .await;
+
         // 3.4 Tag every image and persist the stickers *before* the reply gate runs.
         // A batch the gate decides not to answer must still contribute pictures to the
         // library: her not wanting to talk does not mean the sticker was unwanted.
@@ -799,6 +809,7 @@ fn extract_quote_from_onebot_json(val: &serde_json::Value) -> Option<String> {
                 "face" => body.push_str("[表情]"),
                 "mface" => body.push_str("[表情包]"),
                 "record" => body.push_str("[语音]"),
+                "video" => body.push_str("[短视频]"),
                 _ => {}
             }
         }
@@ -815,5 +826,220 @@ fn extract_quote_from_onebot_json(val: &serde_json::Value) -> Option<String> {
         Some(format!("{}: {}", sender, trimmed))
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+/// 轻量识别本批群消息中的直接语音(`Segment::Voice`)与直接短视频(`Segment::Video`)：
+/// - 语音：通过 NapCat `get_record(out_format="wav")` + 本地静态 `ffmpeg` + `sherpa-onnx` SenseVoice 离线转写文字与情绪；
+/// - 短视频：通过下载/NapCat `get_file` + `ffmpeg` 抽取 2x2 四宫格关键帧（交现有前置视觉模型看懂画面与字幕）并提取音轨离线转写台词。
+async fn enrich_voice_and_video_messages(
+    messages: &mut [IncomingMessage],
+    connection: &crate::onebot::connection::ConnectionHandle,
+    image_describer: Option<&dyn crate::app::preflight::ImageDescriber>,
+    bot_id: &str,
+    group_id: &str,
+) {
+    let script_path = "/opt/gemini-qq-bot/scripts/media_light_recognize.py";
+    if !std::path::Path::new(script_path).is_file() {
+        return;
+    }
+
+    for msg in messages.iter_mut() {
+        let mut voice_items: Vec<(Option<String>, Option<String>)> = Vec::new();
+        let mut video_items: Vec<(Option<String>, Option<String>)> = Vec::new();
+        for seg in &msg.segments {
+            match seg {
+                Segment::Voice { url, file } => voice_items.push((url.clone(), file.clone())),
+                Segment::Video { url, file } => video_items.push((url.clone(), file.clone())),
+                _ => {}
+            }
+        }
+
+        // 1. 轻量听语音
+        for (url_opt, file_opt) in voice_items.into_iter().take(2) {
+            let mut resolved_file = file_opt.clone().unwrap_or_default();
+            let mut resolved_url = url_opt.clone().unwrap_or_default();
+
+            // 优先让 NapCat 协议端内置 SILK 解码器直接转为 wav
+            if let Some(ref f) = file_opt
+                && !f.is_empty()
+                && let Ok(data) = connection
+                    .call_data(
+                        "get_record",
+                        serde_json::json!({"file": f, "out_format": "wav"}),
+                        std::time::Duration::from_secs(12),
+                    )
+                    .await
+            {
+                if let Some(p) = data.get("file").and_then(|v| v.as_str())
+                    && !p.is_empty()
+                {
+                    resolved_file = p.to_string();
+                }
+                if let Some(u) = data.get("url").and_then(|v| v.as_str())
+                    && !u.is_empty()
+                {
+                    resolved_url = u.to_string();
+                }
+            }
+
+            if resolved_file.is_empty() && resolved_url.is_empty() {
+                continue;
+            }
+
+            let out = tokio::process::Command::new("python3")
+                .arg(script_path)
+                .arg("voice")
+                .arg("--file")
+                .arg(&resolved_file)
+                .arg("--url")
+                .arg(&resolved_url)
+                .output()
+                .await;
+
+            if let Ok(output) = out
+                && let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                && val.get("ok").and_then(|v| v.as_bool()) == Some(true)
+            {
+                let dur = val.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let text = val
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                let emo = val
+                    .get("emotion")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                let emo_cn = match emo {
+                    "HAPPY" => "·语气开心",
+                    "ANGRY" => "·语气生气",
+                    "SAD" => "·语气难过",
+                    "FEARFUL" => "·语气紧张",
+                    "SURPRISED" => "·语气惊讶",
+                    _ => "",
+                };
+                let replacement = if !text.is_empty() {
+                    format!("[语音({dur:.1}秒{emo_cn}): 「{text}」]")
+                } else {
+                    format!("[语音({dur:.1}秒): (未识别到清晰人声)]")
+                };
+                if msg.text.contains("[语音]") {
+                    msg.text = msg.text.replacen("[语音]", &replacement, 1);
+                } else {
+                    msg.text.push(' ');
+                    msg.text.push_str(&replacement);
+                }
+            }
+        }
+
+        // 2. 轻量看+听短视频（抽4格关键帧送视觉模型 + 离线听音轨）
+        for (idx, (url_opt, file_opt)) in video_items.into_iter().take(2).enumerate() {
+            let mut resolved_file = file_opt.clone().unwrap_or_default();
+            let mut resolved_url = url_opt.clone().unwrap_or_default();
+
+            if resolved_url.is_empty()
+                && let Some(ref f) = file_opt
+                && !f.is_empty()
+                && let Ok(data) = connection
+                    .call_data(
+                        "get_file",
+                        serde_json::json!({"file": f}),
+                        std::time::Duration::from_secs(15),
+                    )
+                    .await
+            {
+                if let Some(p) = data.get("file").and_then(|v| v.as_str())
+                    && !p.is_empty()
+                {
+                    resolved_file = p.to_string();
+                }
+                if let Some(u) = data.get("url").and_then(|v| v.as_str())
+                    && !u.is_empty()
+                {
+                    resolved_url = u.to_string();
+                }
+            }
+
+            if resolved_file.is_empty() && resolved_url.is_empty() {
+                continue;
+            }
+
+            let grid_path = format!("/tmp/qq_vid_grid_{}_{}.jpg", msg.message_id, idx);
+            let out = tokio::process::Command::new("python3")
+                .arg(script_path)
+                .arg("video")
+                .arg("--file")
+                .arg(&resolved_file)
+                .arg("--url")
+                .arg(&resolved_url)
+                .arg("--out-grid")
+                .arg(&grid_path)
+                .output()
+                .await;
+
+            if let Ok(output) = out
+                && let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                && val.get("ok").and_then(|v| v.as_bool()) == Some(true)
+            {
+                let dur = val.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let transcript = val
+                    .get("transcript")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let gp = val
+                    .get("grid_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+
+                let mut visual_desc = String::new();
+                if !gp.is_empty()
+                    && let Some(describer) = image_describer
+                    && let Ok(bytes) = tokio::fs::read(gp).await
+                    && !bytes.is_empty()
+                {
+                    let b64 =
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+                    let data_urls = vec![format!("data:image/jpeg;base64,{b64}")];
+                    let tags = describer.describe(bot_id, group_id, &data_urls).await;
+                    if let Some(Some(tag)) = tags.into_iter().next() {
+                        let mut parts = Vec::new();
+                        if !tag.description.trim().is_empty() {
+                            parts.push(tag.description.trim().to_string());
+                        }
+                        if !tag.ocr.trim().is_empty() {
+                            parts.push(format!("画面文字: {}", tag.ocr.trim()));
+                        }
+                        visual_desc = parts.join("；");
+                    }
+                }
+                let _ = tokio::fs::remove_file(&grid_path).await;
+
+                let mut summary_parts = Vec::new();
+                if !visual_desc.is_empty() {
+                    summary_parts.push(format!("画面(4格关键帧): {visual_desc}"));
+                }
+                if !transcript.is_empty() {
+                    summary_parts.push(format!("音频转写: 「{transcript}」"));
+                }
+                let replacement = if summary_parts.is_empty() {
+                    format!("[短视频({dur:.1}秒): 已接收，画面与人声均较模糊]")
+                } else {
+                    format!("[短视频({dur:.1}秒) | {}]", summary_parts.join(" | "))
+                };
+                if msg.text.contains("[短视频]") {
+                    msg.text = msg.text.replacen("[短视频]", &replacement, 1);
+                } else {
+                    msg.text.push(' ');
+                    msg.text.push_str(&replacement);
+                }
+            } else {
+                let _ = tokio::fs::remove_file(&grid_path).await;
+            }
+        }
     }
 }

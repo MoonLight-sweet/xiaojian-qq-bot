@@ -42,11 +42,20 @@ pub enum Segment {
         file: Option<String>,
         sub_type: Option<String>,
     },
-    /// A voice message. The audio itself is never fetched; the segment
-    /// renders as the `[语音]` placeholder (mirroring `[图片]`) so the
-    /// agent and the gates can see that somebody spoke, instead of the
-    /// message collapsing into empty text.
-    Voice,
+    /// A voice message (`record`). Retains `url`/`file` for lightweight offline ASR.
+    Voice {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+    },
+    /// A short video message (`video`). Retains `url`/`file` for keyframe collage + ASR.
+    Video {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+    },
     /// A segment type we do not model.
     Unsupported { seg: String },
 }
@@ -253,7 +262,11 @@ pub fn normalize_event(
     let has_address = segments.iter().any(|s| {
         matches!(
             s,
-            Segment::AtBot | Segment::AtOther { .. } | Segment::Image { .. }
+            Segment::AtBot
+                | Segment::AtOther { .. }
+                | Segment::Image { .. }
+                | Segment::Voice { .. }
+                | Segment::Video { .. }
         )
     });
     if text.trim().is_empty() && !has_address {
@@ -412,7 +425,14 @@ pub fn normalize_segments(event: &RawEvent, bot_id: &str) -> Vec<Segment> {
                         file: seg.data.as_ref().and_then(|d| d.file.clone()),
                         sub_type: seg.data.as_ref().and_then(|d| d.sub_type.clone()),
                     }),
-                    "record" => Some(Segment::Voice),
+                    "record" => Some(Segment::Voice {
+                        url: seg.data.as_ref().and_then(|d| d.url.clone()),
+                        file: seg.data.as_ref().and_then(|d| d.file.clone()),
+                    }),
+                    "video" => Some(Segment::Video {
+                        url: seg.data.as_ref().and_then(|d| d.url.clone()),
+                        file: seg.data.as_ref().and_then(|d| d.file.clone()),
+                    }),
                     "face" => {
                         let id_str = seg
                             .data
@@ -520,7 +540,8 @@ pub fn plain_text(segments: &[Segment]) -> String {
                 }
             }
             Segment::Image { .. } => out.push_str("[图片]"),
-            Segment::Voice => out.push_str("[语音]"),
+            Segment::Voice { .. } => out.push_str("[语音]"),
+            Segment::Video { .. } => out.push_str("[短视频]"),
             Segment::Unsupported { .. } => {}
         }
     }
@@ -1130,7 +1151,7 @@ mod tests {
         match normalize_event(&ev, BOT, OWNER, "u1", 0) {
             Normalized::Message(m) => {
                 assert_eq!(m.text, "[语音]");
-                assert_eq!(m.segments[0], Segment::Voice);
+                assert!(matches!(m.segments[0], Segment::Voice { .. }));
             }
             other => panic!("期待消息: {other:?}"),
         }

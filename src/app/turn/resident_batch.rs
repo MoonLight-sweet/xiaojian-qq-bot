@@ -1485,7 +1485,13 @@ mod tests {
 
     #[test]
     fn partition_keeps_a_text_only_batch_whole() {
-        let batch = vec![msg(vec![text_seg()]), msg(vec![Segment::Voice])];
+        let batch = vec![
+            msg(vec![text_seg()]),
+            msg(vec![Segment::Voice {
+                url: None,
+                file: None,
+            }]),
+        ];
         let (text, image) = partition_insertable(&batch);
         assert_eq!(text, vec![0, 1]);
         assert!(image.is_empty());
