@@ -949,10 +949,25 @@ def decide_sts2_smart_action(snap, skip_cids=None):
         return "open_chest; collect; proceed", "打开宝箱领取遗物"
     if screen == "MODAL":
         return "modal confirm", "确认弹窗"
+    if screen == "GAME_OVER":
+        if "continue_game_over" in avail_names:
+            return "continue_game_over", "确认结算画面返回主菜单"
+        return "proceed", "推进结算画面"
+    if screen == "CHARACTER_SELECT":
+        cs = state.get("character_select") or {}
+        if cs.get("embark") or cs.get("can_embark") or "embark" in avail_names:
+            chars = cs.get("characters") or []
+            any_sel = any(c.get("selected") or c.get("is_selected") for c in chars)
+            if any_sel:
+                return "embark", "在选角界面点击启程开始新局"
+        return "char 0", "选择铁甲战士准备启程"
     if "proceed" in avail_names:
         return "proceed", "推进至下一画面"
-    if screen == "MAIN_MENU" and "continue_run" in avail_names:
-        return "continue", "在主菜单继续2号存档战局"
+    if screen == "MAIN_MENU":
+        if "continue_run" in avail_names:
+            return "continue", "在主菜单继续2号存档战局"
+        if "open_character_select" in avail_names:
+            return "new_run", "在主菜单新开一局2号存档练习"
 
     return None, f"当前界面({screen or 'UNKNOWN'})暂未匹配内置动作"
 
@@ -1309,6 +1324,7 @@ def parse_finished_run_summary(run_path):
 
 
 def start_sts2_autoplay(max_turns=25):
+    update_sts2_hud(True, "#10B981", "小简正在启动《杀戮尖塔2》并连接通信模组...")
     launch_sts2_on_interactive_desktop()
     AUTOPLAY_STATE["active"] = True
     AUTOPLAY_STATE["turn"] = 0
@@ -1428,90 +1444,63 @@ print('INJECTED_OK')
         return False, str(e)
 
 
-HUD_STATE = {
-    "visible": False,
-    "color": "#10B981",  # 绿=#10B981(运行中) 黄=#F59E0B(等待/兜底) 红=#EF4444(断开/停止)
-    "text": "小简自动爬塔未启动",
-}
+HUD_STATE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data",
+    "sts2_hud_state.json",
+)
+HUD_SCRIPT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "sts2_hud_overlay.py",
+)
+
+
+def ensure_sts2_hud_on_desktop():
+    """在用户真实物理桌面(winsta0\\default)拉起独立的置顶悬浮状态指示条"""
+    try:
+        # 检查窗口 XiaojianSTS2HUD 是否已存在
+        found = []
+
+        def _cb(hwnd, _):
+            if win32gui.GetWindowText(hwnd) == "XiaojianSTS2HUD":
+                found.append(hwnd)
+
+        win32gui.EnumWindows(_cb, None)
+        if found:
+            return
+        if not os.path.exists(HUD_SCRIPT_PATH):
+            return
+        import sys
+        py_exe = sys.executable
+        pyw_exe = py_exe.replace("python.exe", "pythonw.exe")
+        exe = pyw_exe if os.path.exists(pyw_exe) else py_exe
+        spawn_on_default_desktop(f'"{exe}" "{HUD_SCRIPT_PATH}"', os.path.dirname(HUD_SCRIPT_PATH))
+    except Exception as e:
+        print(f"[STS2-HUD] 拉起桌面悬浮条失败: {e}", flush=True)
 
 
 def update_sts2_hud(visible, color, text):
-    HUD_STATE["visible"] = bool(visible)
-    HUD_STATE["color"] = color
-    HUD_STATE["text"] = text
-
-
-def sts2_hud_overlay_thread():
-    """在屏幕顶部中央绘制置顶、半透明、鼠标完全穿透的实时状态标识条，方便一眼看清运行/断开状态"""
     try:
-        import tkinter as tk
+        os.makedirs(os.path.dirname(HUD_STATE_FILE), exist_ok=True)
+        payload = {
+            "visible": bool(visible),
+            "color": color,
+            "text": text,
+            "active": bool(AUTOPLAY_STATE.get("active", False)),
+            "updated_at": time.time(),
+        }
+        tmp = HUD_STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, HUD_STATE_FILE)
+        if visible:
+            ensure_sts2_hud_on_desktop()
     except Exception:
-        return
-    try:
-        root = tk.Tk()
-        root.overrideredirect(True)
-        root.attributes("-topmost", True)
-        root.attributes("-alpha", 0.86)
-        root.configure(bg="#111827")
-
-        sw = root.winfo_screenwidth()
-        w, h = 640, 34
-        x = max(0, (sw - w) // 2)
-        y = 6
-        root.geometry(f"{w}x{h}+{x}+{y}")
-
-        canvas = tk.Canvas(root, width=20, height=20, bg="#111827", highlightthickness=0)
-        canvas.pack(side="left", padx=(12, 4), pady=7)
-        dot = canvas.create_oval(4, 4, 16, 16, fill="#10B981", outline="")
-
-        lbl = tk.Label(
-            root,
-            text="",
-            fg="#F8FAFC",
-            bg="#111827",
-            font=("Microsoft YaHei UI", 10, "bold"),
-            anchor="w",
-        )
-        lbl.pack(side="left", fill="x", expand=True, padx=(0, 12))
-
-        root.update_idletasks()
-        # 设置鼠标完全穿透 + 不抢前台焦点 (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
-        hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
-        GWL_EXSTYLE = -20
-        ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        ctypes.windll.user32.SetWindowLongW(
-            hwnd,
-            GWL_EXSTYLE,
-            ex_style | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080,
-        )
-        root.withdraw()
-
-        last_vis = False
-
-        def tick():
-            nonlocal last_vis
-            vis = HUD_STATE["visible"]
-            if vis:
-                if not last_vis:
-                    root.deiconify()
-                    last_vis = True
-                canvas.itemconfig(dot, fill=HUD_STATE["color"])
-                lbl.config(text=HUD_STATE["text"])
-            else:
-                if last_vis:
-                    root.withdraw()
-                    last_vis = False
-            root.after(300, tick)
-
-        root.after(300, tick)
-        root.mainloop()
-    except Exception as e:
-        print(f"[STS2-HUD] 悬浮状态条初始化跳过: {e}", flush=True)
+        pass
 
 
 def sts2_autoplay_daemon_loop():
-    """后台全自动连续爬塔推进守护线程（优先通过游戏内 STS2AIAgent 精准直连出牌，带桌面实时状态条与防卡死熔断）"""
-    threading.Thread(target=sts2_hud_overlay_thread, daemon=True).start()
+    """后台全自动连续爬塔推进守护线程（优先通过游戏内 STS2AIAgent 精准直连出牌，带物理桌面实时状态条与防卡死熔断）"""
     unknown_streak = 0
     disconnect_streak = 0
     last_action_sig = ""
@@ -1619,8 +1608,8 @@ def sts2_autoplay_daemon_loop():
             else:
                 unknown_streak += 1
                 update_sts2_hud(True, "#F59E0B", f"小简等待界面 | {reason[:30]} ({time.strftime('%H:%M:%S')})")
-                # 兜底处理《海克斯大乱斗》等工坊模组专属三选一弹窗（排除设置界面避免误点）
-                if unknown_streak >= 3 and str(st.get("screen") or "").upper() != "SETTINGS":
+                # 兜底处理《海克斯大乱斗》等工坊模组专属三选一弹窗（排除主菜单与设置界面避免误点）
+                if unknown_streak >= 3 and str(st.get("screen") or "").upper() not in ("SETTINGS", "MAIN_MENU", "CHARACTER_SELECT"):
                     focus_sts2_game_window()
                     click_screen(640, 420)
                     time.sleep(0.5)
