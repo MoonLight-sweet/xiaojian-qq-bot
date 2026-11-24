@@ -51,14 +51,34 @@ def download_to(url, dest_path):
 
 def resolve_input_media(file_arg, url_arg, tmp_dir, default_ext):
     if file_arg:
-        clean = file_arg.replace("file://", "")
-        if os.path.isfile(clean):
-            return clean
+        clean = file_arg.replace("file://", "").strip()
+        candidates = [clean]
+        # 兼容 NapCat Docker 容器内路径 -> 宿主机挂载路径映射
+        for prefix in ("/app/.config/QQ/", "/root/.config/QQ/", "/home/napcat/.config/QQ/"):
+            if clean.startswith(prefix):
+                candidates.append("/opt/napcat/qq/" + clean[len(prefix):])
+        if clean.startswith("/app/napcat/config/"):
+            candidates.append("/opt/napcat/config/" + clean[len("/app/napcat/config/"):])
+        # 如果传来的是原 .amr/.silk 文件名，优先检查是否已有同目录解码后的 .wav
+        for c in list(candidates):
+            if not c.endswith(".wav"):
+                candidates.append(c + ".wav")
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        # 兜底：若只传了纯文件名，在 /opt/napcat/qq 下按文件名快速定位
+        base = os.path.basename(clean)
+        if base and os.path.isdir("/opt/napcat/qq"):
+            for root_dir, _, files in os.walk("/opt/napcat/qq"):
+                if (base + ".wav") in files:
+                    return os.path.join(root_dir, base + ".wav")
+                if base in files:
+                    return os.path.join(root_dir, base)
     if url_arg and (url_arg.startswith("http://") or url_arg.startswith("https://")):
         dst = os.path.join(tmp_dir, "input" + default_ext)
         download_to(url_arg, dst)
         return dst
-    raise RuntimeError("未找到可读的本地文件或有效下载链接")
+    raise RuntimeError("未找到可读的本地文件或有效下载链接: file=" + str(file_arg))
 
 
 def probe_duration(path):
