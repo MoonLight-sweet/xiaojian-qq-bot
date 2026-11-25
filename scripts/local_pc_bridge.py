@@ -1549,18 +1549,25 @@ HUD_SCRIPT_PATH = os.path.join(
 )
 
 
+def _is_script_running(script_name):
+    try:
+        out = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command",
+             f"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like 'python*' -and $_.CommandLine -like '*{script_name}*' }} | Select-Object -ExpandProperty ProcessId"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        return bool(out.strip())
+    except Exception:
+        return False
+
+
 def ensure_sts2_hud_on_desktop():
     """在用户真实物理桌面(winsta0\\default)拉起独立的置顶悬浮状态指示条"""
     try:
-        # 检查窗口 XiaojianSTS2HUD 是否已存在
-        found = []
-
-        def _cb(hwnd, _):
-            if win32gui.GetWindowText(hwnd) == "XiaojianSTS2HUD":
-                found.append(hwnd)
-
-        win32gui.EnumWindows(_cb, None)
-        if found:
+        if _is_script_running("sts2_hud_overlay.py"):
             return
         if not os.path.exists(HUD_SCRIPT_PATH):
             return
@@ -1612,14 +1619,7 @@ def start_sts2_watch_mode():
         json.dump({"active": True, "started_at": time.time()}, f, ensure_ascii=False)
     update_sts2_hud(True, "#38BDF8", "小简师徒观战模式 | 正在观看你打牌学习，关键操作会弹窗请教")
     try:
-        found = []
-
-        def _cb(hwnd, _):
-            if win32gui.GetWindowText(hwnd) == "XiaojianSTS2WatchCoach":
-                found.append(hwnd)
-
-        win32gui.EnumWindows(_cb, None)
-        if not found and os.path.exists(WATCH_SCRIPT_PATH):
+        if not _is_script_running("sts2_watch_coach.py") and os.path.exists(WATCH_SCRIPT_PATH):
             import sys
             py_exe = sys.executable
             pyw_exe = py_exe.replace("python.exe", "pythonw.exe")
