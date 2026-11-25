@@ -146,9 +146,11 @@ pub fn tool_definitions() -> Value {
                             "sts2_batch",
                             "sts2_review",
                             "sts2_autoplay_start",
-                            "sts2_autoplay_stop"
+                            "sts2_autoplay_stop",
+                            "sts2_watch_start",
+                            "sts2_watch_stop"
                         ],
-                        "description": "status：查看当前已打开窗口与本机已安装应用/游戏列表；open_app：按名称启动本地应用、游戏（如'杀戮尖塔2'、'微信'、'星露谷'、'星铁'、'B站'、'网易云音乐'、'Steam'、'Chrome'）或网址；focus_window：强制将指定窗口切到最前台；close_window：关闭指定窗口；screenshot：截取实时屏幕；click：鼠标点击(x,y)；drag：从(x,y)拖拽到(to_x,to_y)；scroll：滚动滚轮；key：按键或组合键(如 alt+tab, win+d, space, enter, esc)；type_text：输入中英文文字；run_command：执行本地PowerShell命令；sts2_status：通过游戏内STS2AIAgent通信模组零截图读取《杀戮尖塔2》2号练习槽位的实时手牌、费用、怪物意图、护甲缺口、斩杀线预计算与2号存档详情；sts2_act：通过STS2AIAgent向游戏内部精准发送整回合动作序列 action_seq（如 'play 0 0; play 2; end' / 'map 1' / 'pick_card 0; collect' / 'event 0' / 'rest 0' / 'proceed'），100%精准零误差且自动跳过无分支过场；sts2_lookup：查询《杀戮尖塔2》卡牌/遗物/怪物精确图鉴；sts2_batch：批量执行《杀戮尖塔2》动作（支持 action_seq 或用于海克斯模组专属弹窗的 steps 鼠标点击兜底）；sts2_review：更新《杀戮尖塔2》局内流派规划便签，或在阵亡/通关后写入死因复盘与怪物避坑铁律；sts2_autoplay_start：开启基于STS2AIAgent精准引擎的后台全自动连续爬塔循环；sts2_autoplay_stop：立即停止后台自动爬塔循环"
+                        "description": "status：查看当前已打开窗口与本机已安装应用/游戏列表；open_app：按名称启动本地应用、游戏（如'杀戮尖塔2'、'微信'、'星露谷'、'星铁'、'B站'、'网易云音乐'、'Steam'、'Chrome'）或网址；focus_window：强制将指定窗口切到最前台；close_window：关闭指定窗口；screenshot：截取实时屏幕；click：鼠标点击(x,y)；drag：从(x,y)拖拽到(to_x,to_y)；scroll：滚动滚轮；key：按键或组合键(如 alt+tab, win+d, space, enter, esc)；type_text：输入中英文文字；run_command：执行本地PowerShell命令；sts2_status：通过游戏内STS2AIAgent通信模组零截图读取《杀戮尖塔2》2号练习槽位的实时手牌、费用、怪物意图、护甲缺口、斩杀线预计算与2号存档详情；sts2_act：通过STS2AIAgent向游戏内部精准发送整回合动作序列 action_seq（如 'play 0 0; play 2; end' / 'potion 0 0' / 'map 1' / 'pick_card 0; collect' / 'event 0' / 'rest 0' / 'proceed'），100%精准零误差且自动跳过无分支过场；sts2_lookup：查询《杀戮尖塔2》卡牌/遗物/怪物精确图鉴；sts2_batch：批量执行《杀戮尖塔2》动作（支持 action_seq 或用于海克斯模组专属弹窗的 steps 鼠标点击兜底）；sts2_review：更新《杀戮尖塔2》局内流派规划便签，或在阵亡/通关后写入死因复盘与怪物避坑铁律；sts2_autoplay_start：开启基于STS2AIAgent精准引擎（含药水/遗物/海克斯协同）的后台全自动连续爬塔循环；sts2_autoplay_stop：立即停止后台自动爬塔循环；sts2_watch_start：开启师徒观战学徒模式（只看主人打牌不抢鼠标，在右下角弹出小卡片随时请教主人操作思路并记入经验库）；sts2_watch_stop：关闭师徒观战学徒模式"
                     },
                     "action_seq": {
                         "type": "string",

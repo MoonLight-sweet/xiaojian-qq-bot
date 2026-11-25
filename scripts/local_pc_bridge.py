@@ -778,12 +778,15 @@ def decide_sts2_smart_action(snap, skip_cids=None):
         for a in avail
     }
 
-    # 1. 战斗画面：精准计算来袭伤害、护甲缺口、斩杀机会与手牌 cid
+    # 1. 战斗画面：精准计算来袭伤害、护甲缺口、药水、遗物计数、海克斯符文联动与斩杀机会
     if screen == "COMBAT" or "play_card" in avail_names or "end_turn" in avail_names:
         combat = state.get("combat") or {}
+        run = state.get("run") or {}
         player = combat.get("player") or {}
         energy = int(player.get("energy", 0) or 0)
         block = int(player.get("block", 0) or 0)
+        hp, max_hp = _parse_hp_pair(run.get("hp"), 80, 80)
+        turn_num = int(state.get("turn") or 1)
         hand = combat.get("hand") or []
         raw_enemies = combat.get("enemies") or []
         enemies = []
@@ -800,10 +803,67 @@ def decide_sts2_smart_action(snap, skip_cids=None):
             return "end", "场上无存活敌人，结束回合"
 
         incoming_dmg = sum(e["dmg"] for e in enemies)
+        unblocked_dmg = max(0, incoming_dmg - block)
+        is_hard_fight = (len(enemies) >= 2 and incoming_dmg >= 18) or any(e["hp"] >= 75 for e in enemies)
         enemy_by_i = {e["i"]: e for e in enemies}
-        # 默认优先集火血量最低的敌人
         enemies_sorted = sorted(enemies, key=lambda e: (e["hp"], -e["dmg"]))
         default_target = enemies_sorted[0]["i"]
+
+        # ---- (A) 解析遗物与海克斯符文协同上下文 ----
+        relic_names = [r if isinstance(r, str) else str(r.get("name") or r.get("relic_id") or "") for r in (run.get("relics") or [])]
+        relic_ids = [str(x).upper() for x in (run.get("relic_ids") or [])]
+        relic_stacks = list(run.get("relic_stacks") or [])
+        relic_descs = [str(x or "") for x in (run.get("relic_descriptions") or [])]
+
+        relic_blob = " ".join(relic_names + relic_ids + relic_descs).upper()
+        has_orichalcum = ("ORICHALCUM" in relic_blob or "奥利哈钢" in relic_blob)
+        has_attack_draw_hex = ("踢踏舞" in relic_blob or ("攻击牌" in relic_blob and "抽" in relic_blob))
+        has_skill_hex = ("技能牌" in relic_blob and any(k in relic_blob for k in ("抽", "伤害", "力量", "能量", "格挡")))
+        pen_nib_ready = False
+        attack_counter_near = False
+        for i_r, r_id in enumerate(relic_ids):
+            st_val = relic_stacks[i_r] if i_r < len(relic_stacks) else None
+            if st_val is None:
+                continue
+            try:
+                sv = int(st_val)
+            except Exception:
+                continue
+            if "PEN_NIB" in r_id and sv == 9:
+                pen_nib_ready = True
+            if any(k in r_id for k in ("NUNCHAKU", "SHURIKEN", "KUNAI", "ORNAMENTAL_FAN")) and sv >= 2:
+                attack_counter_near = True
+
+        # ---- (B) 智能药水决策（保命 / 斩杀 / 精英Boss战 / 满槽防浪费） ----
+        potions = run.get("potions") or []
+        occupied_pots = [p for p in potions if isinstance(p, dict) and ((p.get("potion_id") is not None) or p.get("occupied"))]
+        pots_full = len(potions) > 0 and len(occupied_pots) >= len(potions)
+        if "use_potion" in avail_names or occupied_pots:
+            for p in occupied_pots:
+                if not (p.get("usable") or p.get("can_use")):
+                    continue
+                p_idx = int(p.get("i", p.get("index", 0)))
+                p_text = f"{p.get('potion_id') or ''} {p.get('name') or ''} {p.get('line') or ''}".upper()
+                p_targets = [int(t) for t in (p.get("targets") or []) if str(t).isdigit()]
+                p_t = default_target if (default_target in p_targets or not p_targets) else p_targets[0]
+
+                is_heal_pot = any(k in p_text for k in ("REGEN", "BLOOD", "HEAL", "FAIRY", "回复", "生命", "再生"))
+                is_block_pot = any(k in p_text for k in ("BLOCK", "DEXTERITY", "GHOST", "HEART", "格挡", "敏捷", "无实体"))
+                is_dmg_pot = any(k in p_text for k in ("FIRE", "EXPLOSIVE", "FEAR", "WEAK", "POISON", "火焰", "爆炸", "易伤", "虚弱", "中毒", "造成"))
+                is_buff_pot = any(k in p_text for k in ("STRENGTH", "ENERGY", "SWIFT", "POWER", "FLEX", "ATTACK", "SKILL", "力量", "能量", "抽", "牌"))
+
+                # 1. 残血或将致死 -> 喝回血/格挡药水
+                if is_heal_pot and (hp <= max_hp * 0.42 or unblocked_dmg >= hp):
+                    return f"potion {p_idx}", f"血量危机({hp}/{max_hp})，使用回复类药水保命"
+                if is_block_pot and (unblocked_dmg >= hp or (unblocked_dmg >= 14 and energy <= 1)):
+                    return f"potion {p_idx}", f"护甲缺口大({unblocked_dmg})，使用防御类药水减伤"
+                # 2. 精英/Boss战或高危攻击 -> 砸伤害/控场药水或喝战力药水
+                if is_dmg_pot and (is_hard_fight or any(e["dmg"] >= 14 for e in enemies) or pots_full):
+                    if p_targets:
+                        return f"potion {p_idx} {p_t}", f"对高危目标使用攻击/削弱药水"
+                    return f"potion {p_idx}", "使用群体伤害/削弱药水"
+                if is_buff_pot and ((is_hard_fight and turn_num <= 2) or (pots_full and turn_num == 1)):
+                    return f"potion {p_idx}", "高难战斗/药水槽满，主动使用增益药水提升战力"
 
         playable = []
         for idx, c in enumerate(hand):
@@ -825,6 +885,7 @@ def decide_sts2_smart_action(snap, skip_cids=None):
             targets_list = [int(t) for t in (c.get("targets") or []) if str(t).isdigit()]
             needs_target = (len(targets_list) > 0) or (len(vs_list) > 0)
             chosen_target = default_target if (default_target in targets_list or not targets_list) else targets_list[0]
+            max_vs_dmg = max([int(v.get("damage") or 0) for v in vs_list], default=0)
             is_block = ("DEFEND" in card_id or "SHIELD" in card_id or "BLOCK" in card_id or (ctype == "skill" and not needs_target and "格挡" in str(c.get("line") or "")))
             is_vuln = ("BASH" in card_id or "TREMBLE" in card_id or "易伤" in str(c.get("line") or ""))
             kill_targets = [
@@ -834,6 +895,7 @@ def decide_sts2_smart_action(snap, skip_cids=None):
             playable.append({
                 "ref": card_ref, "cost": cost, "type": ctype, "card_id": card_id,
                 "needs_target": needs_target, "chosen_target": chosen_target,
+                "max_dmg": max_vs_dmg,
                 "is_block": is_block, "is_vuln": is_vuln,
                 "kill_targets": kill_targets,
             })
@@ -848,33 +910,60 @@ def decide_sts2_smart_action(snap, skip_cids=None):
                 ti = attacking_kills[0]
                 return f"play {p['ref']} {ti}", f"精准打出 {p['card_id']} 斩杀 {enemy_by_i[ti]['name']}"
 
-        # 策略2：有护甲缺口时优先叠甲防御
-        if incoming_dmg > block:
+        # 策略1.5：遗物/海克斯协同优先项
+        # (a) 钢笔尖(9层)就绪：优先打出最高单发伤害攻击牌触发双倍爆发
+        if pen_nib_ready:
+            atks = sorted([p for p in playable if p["type"] == "attack"], key=lambda x: -x["max_dmg"])
+            if atks:
+                a = atks[0]
+                if a["needs_target"]:
+                    return f"play {a['ref']} {a['chosen_target']}", f"触发钢笔尖双倍伤害！打出 {a['card_id']}"
+                return f"play {a['ref']}", f"触发钢笔尖双倍伤害！打出 {a['card_id']}"
+
+        # (b) 0费牌白嫖（如中和/小刀等），零消耗先打提升连击与减伤
+        zero_cards = [p for p in playable if p["cost"] == 0 and not (incoming_dmg == 0 and p["is_block"])]
+        if zero_cards:
+            z = zero_cards[0]
+            if z["needs_target"]:
+                return f"play {z['ref']} {z['chosen_target']}", f"优先白嫖0费牌 {z['card_id']}"
+            return f"play {z['ref']}", f"优先白嫖0费牌 {z['card_id']}"
+
+        # (c) 踢踏舞/攻击抽牌海克斯联动：能量充裕(>=2)且不会致死时，先打攻击牌过牌看新牌再定防
+        if has_attack_draw_hex and energy >= 2 and unblocked_dmg < hp - 8:
+            atks = sorted([p for p in playable if p["type"] == "attack"], key=lambda x: (x["cost"], -x["max_dmg"]))
+            if atks:
+                a = atks[0]
+                if a["needs_target"]:
+                    return f"play {a['ref']} {a['chosen_target']}", f"配合海克斯抽牌机制，先打 {a['card_id']} 过牌"
+                return f"play {a['ref']}", f"配合海克斯抽牌机制，先打 {a['card_id']} 过牌"
+
+        # 策略2：有护甲缺口时优先叠甲防御（奥利哈钢且0甲来袭<=6时跳过防御白嫖6甲）
+        skip_block_for_orichalcum = (has_orichalcum and block == 0 and incoming_dmg <= 6)
+        if incoming_dmg > block and not skip_block_for_orichalcum:
             blocks = [p for p in playable if p["is_block"]]
             if blocks:
                 b = blocks[0]
                 return f"play {b['ref']}", f"来袭伤{incoming_dmg}>护甲{block}，打出 {b['card_id']} 叠甲"
 
-        # 策略3：任意斩杀 -> 易伤 -> 能力牌 -> 攻击牌 -> 其余技能牌（跳过纯空打的防御牌当来袭伤=0）
+        # 策略3：任意斩杀 -> 遗物攻击计数冲刺 -> 易伤 -> 能力牌 -> 技能海克斯 -> 攻击牌 -> 其余牌
         for p in playable:
             if p["kill_targets"]:
                 ti = p["kill_targets"][0]
                 return f"play {p['ref']} {ti}", f"精准斩杀 {enemy_by_i[ti]['name']}"
 
-        non_idle_blocks = [p for p in playable if not (incoming_dmg == 0 and p["is_block"])]
+        non_idle_blocks = [p for p in playable if not ((incoming_dmg == 0 or skip_block_for_orichalcum) and p["is_block"])]
         if not non_idle_blocks:
-            return "end", "敌方本回合无攻击且无输出牌，结束回合"
+            return "end", "本回合无需多余叠甲且无输出牌，结束回合"
 
-        chosen = None
-        for bucket in (
+        buckets = [
+            [p for p in non_idle_blocks if attack_counter_near and p["type"] == "attack"],
             [p for p in non_idle_blocks if p["is_vuln"]],
             [p for p in non_idle_blocks if p["type"] == "power"],
-            [p for p in non_idle_blocks if p["type"] == "attack"],
+            [p for p in non_idle_blocks if has_skill_hex and p["type"] == "skill"],
+            sorted([p for p in non_idle_blocks if p["type"] == "attack"], key=lambda x: -x["max_dmg"]),
             non_idle_blocks,
-        ):
-            if bucket:
-                chosen = bucket[0]
-                break
+        ]
+        chosen = next((b[0] for b in buckets if b), non_idle_blocks[0])
 
         if chosen["needs_target"]:
             ti = chosen["chosen_target"]
@@ -1504,6 +1593,51 @@ def update_sts2_hud(visible, color, text):
         pass
 
 
+WATCH_STATE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data",
+    "sts2_watch_state.json",
+)
+WATCH_SCRIPT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "sts2_watch_coach.py",
+)
+
+
+def start_sts2_watch_mode():
+    """开启师徒观战学徒模式：停掉自动出牌绝不抢鼠标，在物理桌面拉起观战提问小卡片"""
+    stop_sts2_autoplay("切换为师徒观战学徒模式")
+    os.makedirs(os.path.dirname(WATCH_STATE_FILE), exist_ok=True)
+    with open(WATCH_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"active": True, "started_at": time.time()}, f, ensure_ascii=False)
+    update_sts2_hud(True, "#38BDF8", "小简师徒观战模式 | 正在观看你打牌学习，关键操作会弹窗请教")
+    try:
+        found = []
+
+        def _cb(hwnd, _):
+            if win32gui.GetWindowText(hwnd) == "XiaojianSTS2WatchCoach":
+                found.append(hwnd)
+
+        win32gui.EnumWindows(_cb, None)
+        if not found and os.path.exists(WATCH_SCRIPT_PATH):
+            import sys
+            py_exe = sys.executable
+            pyw_exe = py_exe.replace("python.exe", "pythonw.exe")
+            exe = pyw_exe if os.path.exists(pyw_exe) else py_exe
+            spawn_on_default_desktop(f'"{exe}" "{WATCH_SCRIPT_PATH}"', os.path.dirname(WATCH_SCRIPT_PATH))
+    except Exception as e:
+        return f"开启观战学徒模式异常: {e}"
+    return "已开启《杀戮尖塔2》师徒观战学徒模式！小简现在只看你操作绝不抢鼠标，遇到关键选牌、喝药水、火堆、遗物/海克斯联动或卖血决策时会在右下角弹出小卡片向你请教思路，你教的经验会自动存入实战经验库。"
+
+
+def stop_sts2_watch_mode():
+    os.makedirs(os.path.dirname(WATCH_STATE_FILE), exist_ok=True)
+    with open(WATCH_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"active": False, "stopped_at": time.time()}, f, ensure_ascii=False)
+    update_sts2_hud(False, "#EF4444", "小简观战学徒模式已结束")
+    return "已关闭《杀戮尖塔2》师徒观战学徒模式。"
+
+
 def sts2_autoplay_daemon_loop():
     """后台全自动连续爬塔推进守护线程（优先通过游戏内 STS2AIAgent 精准直连出牌，带物理桌面实时状态条与防卡死熔断）"""
     unknown_streak = 0
@@ -1776,6 +1910,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
             action_note = start_sts2_autoplay(req.get("max_turns", 25))
         elif mode == "sts2_autoplay_stop":
             action_note = stop_sts2_autoplay(str(req.get("reason") or "主人或机器人主动停止"))
+        elif mode == "sts2_watch_start":
+            action_note = start_sts2_watch_mode()
+        elif mode == "sts2_watch_stop":
+            action_note = stop_sts2_watch_mode()
 
         active_title = get_active_window_title()
         if (
