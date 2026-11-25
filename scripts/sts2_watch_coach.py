@@ -256,12 +256,13 @@ class SpectatorCoachApp:
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        self.w, self.h = 460, 200
-        self.x = max(12, sw - self.w - 22)
-        self.y = max(12, sh - self.h - 70)
+        scale = max(1.0, sw / 1600.0)
+        self.w, self.h = int(460 * scale), int(190 * scale)
+        self.x = max(12, sw - self.w - int(28 * scale))
+        self.y = max(12, sh - self.h - int(76 * scale))
         self.root.geometry(f"{self.w}x{self.h}+{self.x}+{self.y}")
 
-        frame = tk.Frame(self.root, bg="#0F172A", highlightbackground="#38BDF8", highlightthickness=2)
+        frame = tk.Frame(self.root, bg="#0F172A", highlightbackground="#38BDF8", highlightthickness=3)
         frame.pack(fill="both", expand=True)
 
         top = tk.Frame(frame, bg="#1E293B")
@@ -271,9 +272,9 @@ class SpectatorCoachApp:
             text="● 小简观战学徒 · 已就位",
             fg="#38BDF8",
             bg="#1E293B",
-            font=("Microsoft YaHei UI", 10, "bold"),
-            padx=10,
-            pady=6,
+            font=("Microsoft YaHei UI", 11, "bold"),
+            padx=14,
+            pady=8,
             anchor="w",
         )
         self.lbl_tag.pack(side="left", fill="x", expand=True)
@@ -285,28 +286,28 @@ class SpectatorCoachApp:
             bg="#334155",
             fg="#E2E8F0",
             relief="flat",
-            font=("Microsoft YaHei UI", 9),
-            padx=8,
-            pady=2,
+            font=("Microsoft YaHei UI", 10),
+            padx=12,
+            pady=4,
             cursor="hand2",
         )
-        btn_close.pack(side="right", padx=8, pady=4)
+        btn_close.pack(side="right", padx=10, pady=6)
 
         self.lbl_q = tk.Label(
             frame,
             text="师徒观战模式已启动！你切到《杀戮尖塔2》正常打牌即可，遇到选牌、喝药水、走路线或关键操作时我会在这里弹出向你请教。",
             fg="#F8FAFC",
             bg="#0F172A",
-            font=("Microsoft YaHei UI", 10),
-            wraplength=430,
+            font=("Microsoft YaHei UI", 11),
+            wraplength=self.w - 36,
             justify="left",
             anchor="nw",
-            padx=12,
-            pady=8,
+            padx=16,
+            pady=10,
         )
         self.lbl_q.pack(fill="both", expand=True)
 
-        bottom = tk.Frame(frame, bg="#0F172A", padx=10, pady=8)
+        bottom = tk.Frame(frame, bg="#0F172A", padx=14, pady=12)
         bottom.pack(fill="x")
         self.entry = tk.Entry(
             bottom,
@@ -314,9 +315,9 @@ class SpectatorCoachApp:
             fg="#FFFFFF",
             insertbackground="#38BDF8",
             relief="flat",
-            font=("Microsoft YaHei UI", 10),
+            font=("Microsoft YaHei UI", 11),
         )
-        self.entry.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 8))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=7, padx=(0, 10))
         self.entry.bind("<Return>", lambda _e: self.submit_answer())
         self.entry.bind("<Escape>", lambda _e: self.hide_popup())
 
@@ -327,9 +328,9 @@ class SpectatorCoachApp:
             bg="#2563EB",
             fg="#FFFFFF",
             relief="flat",
-            font=("Microsoft YaHei UI", 9, "bold"),
-            padx=12,
-            pady=5,
+            font=("Microsoft YaHei UI", 10, "bold"),
+            padx=16,
+            pady=7,
             cursor="hand2",
         )
         self.btn_send.pack(side="right")
@@ -337,9 +338,9 @@ class SpectatorCoachApp:
         self.root.update_idletasks()
         self.hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
 
-        # 启动时展示 6 秒就位提示，让用户立刻亲眼确认右下角弹窗有效
+        # 启动时展示 8 秒就位提示，让用户立刻亲眼确认右下角弹窗有效
         self.popup_shown_at = time.time()
-        self.auto_hide_sec = 6.0
+        self.auto_hide_sec = 8.0
         self._force_topmost()
 
         threading.Thread(target=self.bg_watcher_loop, daemon=True).start()
