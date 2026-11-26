@@ -922,7 +922,7 @@ impl App {
                         .await
                         .unwrap_or_else(|_| "u1".to_string());
                     let msg_id = format!("proactive-{}-{now}", group.group_id);
-                    let text = "【系统内部主动话题触发（群友不可见，切勿引用m1，切勿提起系统或主人）】现在是白天闲聊时间，群里已经安静有一会儿了。请你用温和友善、治愈贴心的语气主动在群里开启一个自然轻松的话题，关心一下大家，或者先用 call_mcp_tool 调用 bilibili_browse(mode=\"popular\") 或 bilibili_browse(mode=\"comments\") 刷一下B站热门视频和评论区，顺手把有趣的表情包收进你的表情库并用 sticker_ops 分享给群友；如果很有感触也可以顺手调 qzone_publish 发条温暖的日常空间说说。注意：直接对群里大家说话，不要叫主人，quote_ref 必须留空！".to_string();
+                    let text = "【系统内部主动冒泡触发（群友不可见，切勿引用m1，切勿提起系统或主人）】群里安静了一会儿，像普通群友闲着没事随手冒个泡一样，很随意地聊一句眼前想到的事，或者先用 call_mcp_tool 调用 bilibili_browse(mode=\"popular\") 或 bilibili_browse(mode=\"comments\") 逛一下B站，看到真觉得有意思的视频或神评再顺口分享一两句（顺手把好玩的表情包收进图库发一张也行；有感触偶尔调 qzone_publish 发条随手记）。严禁像主持人报时一样喊“大家下午好呀”或一口气播报多个视频，短句自然别带句号，quote_ref 必须留空".to_string();
                     let synthetic = crate::onebot::normalize::IncomingMessage {
                         bot_id: proactive_self.config.bot_id.clone(),
                         group_id: group.group_id.clone(),

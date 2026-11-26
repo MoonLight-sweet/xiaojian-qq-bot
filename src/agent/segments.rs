@@ -89,6 +89,259 @@ pub fn message_gaps_ms(parts: &[impl AsRef<str>]) -> Vec<u64> {
         .collect()
 }
 
+/// 拟真打字停顿的最短间隔（毫秒）。
+pub const HUMAN_MIN_GAP_MS: u64 = 900;
+/// 拟真打字停顿的最长间隔（毫秒）。
+pub const HUMAN_MAX_GAP_MS: u64 = 2_600;
+
+/// 按下一条消息的字数估算“真人打字所需停顿”，并叠加稳定的小幅随机感波动，
+/// 避免连续多条消息像复制粘贴一样机械等距。
+pub fn humanized_gaps_ms(parts: &[impl AsRef<str>]) -> Vec<u64> {
+    parts
+        .windows(2)
+        .enumerate()
+        .map(|(idx, pair)| {
+            let next_text = pair[1].as_ref();
+            let next_chars = next_text.chars().count() as u64;
+            // 用内容字节做一个轻量的确定性混合，产生 0..=420ms 的自然波动
+            let mut hash: u64 = 0x517c_c1b7_2722_0a95 ^ (idx as u64).wrapping_mul(31);
+            for b in next_text.as_bytes() {
+                hash = hash.wrapping_mul(1_099_511_628_211) ^ (*b as u64);
+            }
+            let jitter = hash % 421;
+            700u64
+                .saturating_add(next_chars.saturating_mul(65))
+                .saturating_add(jitter)
+                .clamp(HUMAN_MIN_GAP_MS, HUMAN_MAX_GAP_MS)
+        })
+        .collect()
+}
+
+/// 判断一条消息是否属于代码、链接、分步教程或固定问候，命中时不做口语化拆改，防止误伤正经内容。
+fn is_structured_or_formal_part(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() || t.starts_with("Ciallo") {
+        return true;
+    }
+    if t.contains("http://")
+        || t.contains("https://")
+        || t.contains('`')
+        || t.contains('\n')
+        || t.contains("::")
+        || t.contains("->")
+        || t.contains(" --")
+        || t.contains(":\\")
+        || t.contains("/opt/")
+        || t.contains("/etc/")
+    {
+        return true;
+    }
+    // 列表或分步骤格式开头
+    let list_prefix = t.starts_with("- ")
+        || t.starts_with("* ")
+        || t.starts_with("• ")
+        || t.starts_with("（1）")
+        || t.starts_with("(1)")
+        || t.starts_with("1.")
+        || t.starts_with("1、")
+        || t.starts_with("2.")
+        || t.starts_with("2、")
+        || t.starts_with("①");
+    if list_prefix {
+        return true;
+    }
+    // 同一段里同时包含多个步骤编号
+    if (t.contains("1.") && t.contains("2.")) || (t.contains("(1)") && t.contains("(2)")) {
+        return true;
+    }
+    false
+}
+
+/// 去掉句尾孤立的单个中文句号「。」；保留「？」「！」「～」「……」「...」以及刻意打出的连续句号「。。」。
+fn strip_single_trailing_period(text: &str) -> String {
+    let trimmed = text.trim();
+    if !trimmed.ends_with('。') {
+        return trimmed.to_string();
+    }
+    let without_last = trimmed.strip_suffix('。').unwrap_or(trimmed);
+    // 保留连续句号（如“无语。。”），只剥离单个书面的收尾句号
+    if without_last.ends_with('。') {
+        return trimmed.to_string();
+    }
+    without_last.trim_end().to_string()
+}
+
+/// 在不落入引号、括号、书名号内部的前提下，按单个中文句号「。」拆开（跳过「。。」）。
+fn split_by_single_cjk_period(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth: i32 = 0;
+    let mut in_ascii_quote = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        match ch {
+            '「' | '『' | '（' | '(' | '《' | '【' | '“' => depth += 1,
+            '」' | '』' | '）' | ')' | '》' | '】' | '”' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            '"' => in_ascii_quote = !in_ascii_quote,
+            _ => {}
+        }
+        if ch == '。' && depth == 0 && !in_ascii_quote {
+            let prev_is_period = i > 0 && chars[i - 1] == '。';
+            let next_is_period = i + 1 < chars.len() && chars[i + 1] == '。';
+            if !prev_is_period && !next_is_period {
+                let piece = current.trim().to_string();
+                if !piece.is_empty() {
+                    parts.push(piece);
+                }
+                current.clear();
+                i += 1;
+                continue;
+            }
+        }
+        current.push(ch);
+        i += 1;
+    }
+    let tail = current.trim().to_string();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    parts
+}
+
+/// 若单条日常闲聊偏长（22~65字），在靠近中段（30%~70%）且不在引号/括号内的中文逗号「，」处自然拆成两条。
+fn maybe_split_mid_comma(text: &str) -> Option<(String, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if !(22..=65).contains(&len) {
+        return None;
+    }
+    let target = len / 2;
+    let min_pos = (len * 30 / 100).max(6);
+    let max_pos = (len * 70 / 100).min(len.saturating_sub(6));
+    if min_pos > max_pos {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    let mut in_ascii_quote = false;
+    let mut best: Option<(usize, usize)> = None; // (distance_to_mid, char_index)
+    for (idx, &ch) in chars.iter().enumerate() {
+        match ch {
+            '「' | '『' | '（' | '(' | '《' | '【' | '“' => depth += 1,
+            '」' | '』' | '）' | ')' | '》' | '】' | '”' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            '"' => in_ascii_quote = !in_ascii_quote,
+            _ => {}
+        }
+        if ch == '，' && depth == 0 && !in_ascii_quote && idx >= min_pos && idx <= max_pos {
+            let dist = idx.abs_diff(target);
+            if best.is_none_or(|(best_dist, _)| dist < best_dist) {
+                best = Some((dist, idx));
+            }
+        }
+    }
+    let (_, split_at) = best?;
+    let left: String = chars[..split_at]
+        .iter()
+        .collect::<String>()
+        .trim()
+        .to_string();
+    let right: String = chars[split_at + 1..]
+        .iter()
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if left.chars().count() >= 6 && right.chars().count() >= 6 {
+        Some((left, right))
+    } else {
+        None
+    }
+}
+
+/// 发消息前对日常闲聊段落做轻量拟人化处理：
+/// 1) 剥离残余句尾颜文字；
+/// 2) 保护代码、链接、步骤清单与固定问候不被误改；
+/// 3) 对日常闲聊去掉生硬收尾句号，并把混杂句中句号或过长的单条中长闲聊适度拆成自然短句；
+/// 4) 保持引用编号对齐（若一段拆成多段，原引用仅挂在第一段上），且总条数不超过 `MAX_REPLY_PARTS`。
+pub fn humanize_chat_parts(
+    parts: &[String],
+    quote_ids: &[Option<String>],
+) -> (Vec<String>, Vec<Option<String>>) {
+    let mut out_parts: Vec<String> = Vec::with_capacity(parts.len() + 2);
+    let mut out_quotes: Vec<Option<String>> = Vec::with_capacity(parts.len() + 2);
+
+    for (idx, raw) in parts.iter().enumerate() {
+        let quote = quote_ids.get(idx).cloned().unwrap_or(None);
+        let base = strip_trailing_kaomoji(raw);
+        let base = base.trim().to_string();
+        if base.is_empty() {
+            continue;
+        }
+        if is_structured_or_formal_part(&base) {
+            out_parts.push(base);
+            out_quotes.push(quote);
+            continue;
+        }
+        let char_len = base.chars().count();
+        // 超过 65 字的较长说明不乱拆，只顺手去掉末尾孤立的中文句号
+        if char_len > 65 {
+            let cleaned = strip_single_trailing_period(&base);
+            if !cleaned.is_empty() {
+                out_parts.push(cleaned);
+                out_quotes.push(quote);
+            }
+            continue;
+        }
+
+        // 先尝试按句中单个中文句号拆分（仅在不超过 MAX_REPLY_PARTS 时展开）
+        let period_pieces = split_by_single_cjk_period(&base);
+        let mut expanded: Vec<String> = if period_pieces.len() > 1
+            && out_parts.len() + period_pieces.len() <= MAX_REPLY_PARTS
+        {
+            period_pieces
+                .into_iter()
+                .map(|p| strip_single_trailing_period(&p))
+                .filter(|p| !p.is_empty())
+                .collect()
+        } else {
+            let single = strip_single_trailing_period(&base);
+            if single.is_empty() {
+                Vec::new()
+            } else {
+                vec![single]
+            }
+        };
+
+        // 如果这一段仍只有 1 条、整体发送条数不多（< 5），再适度在中段逗号处拆成两条短气泡
+        if expanded.len() == 1
+            && out_parts.len() + parts.len().saturating_sub(idx) < 5
+            && out_parts.len() + 2 <= MAX_REPLY_PARTS
+            && let Some((left, right)) = maybe_split_mid_comma(&expanded[0])
+        {
+            expanded = vec![left, right];
+        }
+
+        let mut attached_quote = quote;
+        for piece in expanded {
+            if out_parts.len() >= MAX_REPLY_PARTS {
+                break;
+            }
+            out_parts.push(piece);
+            out_quotes.push(attached_quote.take());
+        }
+    }
+
+    (out_parts, out_quotes)
+}
+
 fn clean_parts(parts: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for part in parts {
@@ -627,5 +880,83 @@ mod tests {
             strip_trailing_kaomoji("普通括号（含解释说明文字）"),
             "普通括号（含解释说明文字）"
         );
+    }
+
+    #[test]
+    fn humanize_strips_single_period_but_keeps_emotion_and_structured_text() {
+        let parts = vec![
+            "天气冷了多穿点。".to_string(),
+            "真的假的？".to_string(),
+            "无语。。".to_string(),
+            "啊这……".to_string(),
+            "Ciallo～(∠・ω< )⌒☆ 我是小简".to_string(),
+            "链接在这里：http://8.218.197.39:18081/study/plan/abc。".to_string(),
+            "1. 先重启服务。".to_string(),
+        ];
+        let quotes = vec![Some("q1".to_string()), None, None, None, None, None, None];
+        let (out, out_q) = humanize_chat_parts(&parts, &quotes);
+        assert_eq!(
+            out,
+            vec![
+                "天气冷了多穿点",
+                "真的假的？",
+                "无语。。",
+                "啊这……",
+                "Ciallo～(∠・ω< )⌒☆ 我是小简",
+                "链接在这里：http://8.218.197.39:18081/study/plan/abc。",
+                "1. 先重启服务。",
+            ]
+        );
+        assert_eq!(out_q[0].as_deref(), Some("q1"));
+    }
+
+    #[test]
+    fn humanize_splits_mid_period_and_long_comma_preserving_quote_on_first_piece() {
+        let parts = vec![
+            "好像确实是这样。你可以先试试重启。".to_string(),
+            "刚才刷到那个视频真的笑死我了，你也快去看看评论区吧，太离谱了。".to_string(),
+        ];
+        let quotes = vec![Some("m1".to_string()), Some("m2".to_string())];
+        let (out, out_q) = humanize_chat_parts(&parts, &quotes);
+        assert_eq!(
+            out,
+            vec![
+                "好像确实是这样",
+                "你可以先试试重启",
+                "刚才刷到那个视频真的笑死我了",
+                "你也快去看看评论区吧，太离谱了",
+            ]
+        );
+        assert_eq!(
+            out_q,
+            vec![Some("m1".to_string()), None, Some("m2".to_string()), None,]
+        );
+    }
+
+    #[test]
+    fn humanize_does_not_split_comma_inside_quotes_and_strips_kaomoji() {
+        let parts = vec!["他说「今天太忙了，明天再去」，你觉得行不行 (´･ω･`)".to_string()];
+        let quotes = vec![None];
+        let (out, _) = humanize_chat_parts(&parts, &quotes);
+        // 括号/引号内的逗号不能切，只允许在外面切或保持完整
+        assert!(out.iter().all(|s| !s.contains("´･ω･`")));
+        assert!(out.join("，").contains("「今天太忙了，明天再去」"));
+    }
+
+    #[test]
+    fn humanized_gaps_scale_with_next_part_within_bounds() {
+        let parts = [
+            "嗯",
+            "哈哈",
+            &"这句稍微长一点用来模拟认真打字的长度".repeat(2),
+        ];
+        let gaps = humanized_gaps_ms(&parts);
+        assert_eq!(gaps.len(), 2);
+        assert!(
+            gaps.iter()
+                .all(|g| (HUMAN_MIN_GAP_MS..=HUMAN_MAX_GAP_MS).contains(g))
+        );
+        assert!(gaps[1] > gaps[0], "下一句更长时停顿应更长: {:?}", gaps);
+        assert!(humanized_gaps_ms(&["单条"]).is_empty());
     }
 }

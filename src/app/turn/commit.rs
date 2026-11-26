@@ -877,20 +877,32 @@ impl TurnExecutor {
             kept_parts.push(part.clone());
             kept_quote_ids.push(part_quote_ids.get(index).cloned().unwrap_or(None));
         }
-        let parts = kept_parts;
-        if replay_blocked > 0 && parts.is_empty() && sticker_sends.is_empty() {
-            let _ = self
-                .store
-                .audit(
-                    "system",
-                    &format!("reply.replay_blocked.g{}.all", job.group_id),
-                    Some(&self.bot_id),
-                    Some(&job.group_id),
-                    crate::now_unix(),
-                )
-                .await;
+        // 发消息前做轻量口语化清洗：日常闲聊去掉生硬句尾句号、中长句适度拆短，
+        // 同时跳过代码/链接/步骤清单，并保持引用关系对齐。
+        let (parts, kept_quote_ids) =
+            crate::agent::segments::humanize_chat_parts(&kept_parts, &kept_quote_ids);
+        if parts.is_empty() && sticker_sends.is_empty() {
+            if replay_blocked > 0 {
+                let _ = self
+                    .store
+                    .audit(
+                        "system",
+                        &format!("reply.replay_blocked.g{}.all", job.group_id),
+                        Some(&self.bot_id),
+                        Some(&job.group_id),
+                        crate::now_unix(),
+                    )
+                    .await;
+            }
             let _ = self.store.delete_pending(&covered).await;
-            log_timing("replay_blocked", 0);
+            log_timing(
+                if replay_blocked > 0 {
+                    "replay_blocked"
+                } else {
+                    "empty_after_humanize"
+                },
+                0,
+            );
             return Err(TurnResult::DroppedStale);
         }
 
@@ -1008,7 +1020,7 @@ impl TurnExecutor {
         let _ = self.store.delete_pending(&covered).await;
 
         // 9. Deliver one part at a time. A later failure seals the rest.
-        let gaps = crate::agent::segments::message_gaps_ms(&parts);
+        let gaps = crate::agent::segments::humanized_gaps_ms(&parts);
         let send_started = std::time::Instant::now();
         self.deliver_parts(&ids, &gaps, &job.group_id, &job.batch_id)
             .await;

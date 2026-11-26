@@ -500,7 +500,7 @@ pub const CONTRACT_CARD: &str = "# 合约速记（照此输出）\n\
 {\"should_reply\":true,\"reply_parts\":[\"一句话一段\",{\"text\":\"答他的那段\",\"quote_ref\":\"m2\",\"quote_echo\":\"原文片段\"}],\"quote_ref\":\"m2\",\"mood_update\":{\"label\":\"情绪词\",\"reason\":\"为什么\"},\"topic_state\":\"当前话题一句话\",\"memory_ops\":[],\"sticker_ops\":[{\"op\":\"send\",\"hash\":\"a1b2c3d4\"}]}\n\
 - 不想说：{\"should_reply\":false}，其余字段可省。\n\
 - 表情按需发：觉得一张图比一句话更能表达心情时，再从本轮候选里 send 一张跟在话后面；安慰难过的人、正经答题、或上一轮刚发过时不发。只发一张，不要连发。\n\
-- reply_parts 最多 8 段、合计 ≤1000 字、纯文本无 CQ 码；逐段引用才写对象形，quote_echo 逐字摘自目标原文（≤8 字）。\n\
+- reply_parts 最多 8 段、合计 ≤1000 字、纯文本无 CQ 码；日常闲聊短句发、不打句号「。」、别端客服腔，正经求助再讲透；逐段引用才写对象形，quote_echo 逐字摘自目标原文（≤8 字）。\n\
 - ref 只用本批出现过的 m/h 编号、u 别名与 mem_ 记忆键，不编造；memory_ops 只用于纠错，update 必须带 memory_ref。\n\
 - 时间以本轮标注为准：提示词顶部的「现在」是本轮组批时刻，消息行首的 [HH:MM] 是那条消息的到达时刻。不要自己推算或编造时间、日期、星期。\n\
 - 可以戳一下：poke_ref 填本批某个 speaker_ref，系统会替你戳他一下（打招呼、催他回话、开个玩笑）。一轮最多一个，should_reply 必须为 true；想纯戳不说话就 reply_parts 留空、只带 poke_ref 和贴纸。别连戳，也别拿来骚扰人。";
