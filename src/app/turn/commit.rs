@@ -881,6 +881,42 @@ impl TurnExecutor {
         // 同时跳过代码/链接/步骤清单，并保持引用关系对齐。
         let (parts, kept_quote_ids) =
             crate::agent::segments::humanize_chat_parts(&kept_parts, &kept_quote_ids);
+        // 表情包冷却：最近 3 轮机器人发言里发过表情，本轮带在文字后面的表情就去掉，
+        // 避免“两句话 + 一张表情”变成固定结尾；只发表情不配字的回复不受影响。
+        if !parts.is_empty() && !sticker_sends.is_empty() {
+            let recent = self
+                .store
+                .recent_group_messages(&self.bot_id, &job.group_id, 30)
+                .await
+                .unwrap_or_default();
+            let history: Vec<(bool, bool)> = recent
+                .iter()
+                .map(|m| {
+                    let is_bot = m.speaker_role == SpeakerRole::Bot.as_str();
+                    (
+                        is_bot,
+                        is_bot && (m.sticker_hash.is_some() || m.text == "[表情]"),
+                    )
+                })
+                .collect();
+            if crate::agent::segments::sticker_on_cooldown(&history, 3) {
+                let _ = self
+                    .store
+                    .audit(
+                        "system",
+                        &format!(
+                            "sticker.send.cooldown.g{}.n{}",
+                            job.group_id,
+                            sticker_sends.len()
+                        ),
+                        Some(&self.bot_id),
+                        Some(&job.group_id),
+                        crate::now_unix(),
+                    )
+                    .await;
+                sticker_sends.clear();
+            }
+        }
         if parts.is_empty() && sticker_sends.is_empty() {
             if replay_blocked > 0 {
                 let _ = self

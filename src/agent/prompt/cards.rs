@@ -15,8 +15,8 @@ pub(super) fn mcp_contract() -> String {
             "{\n  \"turn_token\": \"本轮口令，照抄合约速记卡上给的值\",\n  \"should_reply\"",
         )
         .replace(
-            "用 call_mcp_tool 调用 memory_search / sticker_search / sticker_keep / bilibili_browse / profile_update / qzone_publish / search_meme_wiki / local_pc_control。不要 run_command，不要操作网页表单，不要调用这八个以外的 MCP 工具。",
-            "用 call_mcp_tool 调用 memory_search / sticker_search / sticker_keep / bilibili_browse / profile_update / qzone_publish / search_meme_wiki / local_pc_control / submit_reply。不要 run_command，不要操作网页表单，不要调用这几个以外的 MCP 工具（submit_reply 是交付用的）。",
+            "用 call_mcp_tool 调用 memory_search / sticker_search / sticker_keep / bilibili_browse / profile_update / qzone_publish / search_meme_wiki / local_pc_control / study_hub。不要 run_command，不要操作网页表单，不要调用这九个以外的 MCP 工具。",
+            "用 call_mcp_tool 调用 memory_search / sticker_search / sticker_keep / bilibili_browse / profile_update / qzone_publish / search_meme_wiki / local_pc_control / study_hub / submit_reply。不要 run_command，不要操作网页表单，不要调用这几个以外的 MCP 工具（submit_reply 是交付用的）。",
         )
         + "\n19. 每轮必须调用 submit_reply 恰好一次、作为本轮最后一个动作；提交之后不要再写正文。提交被拒绝时会说明原因，修正后在本轮内重新调用，不要另起一轮、也不要返回重写整轮。\n20. 轮内来了插入消息时，把新消息并入同一个回答，并重新调用 submit_reply：以最后一次被接受的提交为准。\n21. 没有任何合格提交的轮次按失败收场：哪怕只是不想说话，也要调用一次 submit_reply 并把 should_reply 填 false。"
 }

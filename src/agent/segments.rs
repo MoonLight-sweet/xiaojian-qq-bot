@@ -90,9 +90,9 @@ pub fn message_gaps_ms(parts: &[impl AsRef<str>]) -> Vec<u64> {
 }
 
 /// 拟真打字停顿的最短间隔（毫秒）。
-pub const HUMAN_MIN_GAP_MS: u64 = 900;
+pub const HUMAN_MIN_GAP_MS: u64 = 600;
 /// 拟真打字停顿的最长间隔（毫秒）。
-pub const HUMAN_MAX_GAP_MS: u64 = 2_600;
+pub const HUMAN_MAX_GAP_MS: u64 = 4_000;
 
 /// 按下一条消息的字数估算“真人打字所需停顿”，并叠加稳定的小幅随机感波动，
 /// 避免连续多条消息像复制粘贴一样机械等距。
@@ -103,14 +103,15 @@ pub fn humanized_gaps_ms(parts: &[impl AsRef<str>]) -> Vec<u64> {
         .map(|(idx, pair)| {
             let next_text = pair[1].as_ref();
             let next_chars = next_text.chars().count() as u64;
-            // 用内容字节做一个轻量的确定性混合，产生 0..=420ms 的自然波动
+            // 用内容字节做一个轻量的确定性混合，产生 0..=1500ms 的明显波动，
+            // 让几条消息之间有快有慢，而不是每条都隔差不多两秒
             let mut hash: u64 = 0x517c_c1b7_2722_0a95 ^ (idx as u64).wrapping_mul(31);
             for b in next_text.as_bytes() {
                 hash = hash.wrapping_mul(1_099_511_628_211) ^ (*b as u64);
             }
-            let jitter = hash % 421;
-            700u64
-                .saturating_add(next_chars.saturating_mul(65))
+            let jitter = hash % 1501;
+            450u64
+                .saturating_add(next_chars.saturating_mul(70))
                 .saturating_add(jitter)
                 .clamp(HUMAN_MIN_GAP_MS, HUMAN_MAX_GAP_MS)
         })
@@ -277,6 +278,8 @@ pub fn humanize_chat_parts(
 ) -> (Vec<String>, Vec<Option<String>>) {
     let mut out_parts: Vec<String> = Vec::with_capacity(parts.len() + 2);
     let mut out_quotes: Vec<Option<String>> = Vec::with_capacity(parts.len() + 2);
+    let single_model_part = parts.iter().filter(|p| !p.trim().is_empty()).count() == 1;
+    let mut any_structured = false;
 
     for (idx, raw) in parts.iter().enumerate() {
         let quote = quote_ids.get(idx).cloned().unwrap_or(None);
@@ -286,6 +289,7 @@ pub fn humanize_chat_parts(
             continue;
         }
         if is_structured_or_formal_part(&base) {
+            any_structured = true;
             out_parts.push(base);
             out_quotes.push(quote);
             continue;
@@ -301,16 +305,20 @@ pub fn humanize_chat_parts(
             continue;
         }
 
-        // 先尝试按句中单个中文句号拆分（仅在不超过 MAX_REPLY_PARTS 时展开）
-        let period_pieces = split_by_single_cjk_period(&base);
+        // 句中单个句号：模型只给了 1 段时才拆成短句（最多拆成 CHAT_MAX_BUBBLES 条）；
+        // 模型自己已经分了多段时，就把句中句号换成逗号，不再额外增加气泡数。
+        let period_pieces: Vec<String> = split_by_single_cjk_period(&base)
+            .into_iter()
+            .map(|p| strip_single_trailing_period(&p))
+            .filter(|p| !p.is_empty())
+            .collect();
         let mut expanded: Vec<String> = if period_pieces.len() > 1
-            && out_parts.len() + period_pieces.len() <= MAX_REPLY_PARTS
+            && single_model_part
+            && period_pieces.len() <= CHAT_MAX_BUBBLES
         {
             period_pieces
-                .into_iter()
-                .map(|p| strip_single_trailing_period(&p))
-                .filter(|p| !p.is_empty())
-                .collect()
+        } else if period_pieces.len() > 1 {
+            vec![period_pieces.join("，")]
         } else {
             let single = strip_single_trailing_period(&base);
             if single.is_empty() {
@@ -320,10 +328,9 @@ pub fn humanize_chat_parts(
             }
         };
 
-        // 如果这一段仍只有 1 条、整体发送条数不多（< 5），再适度在中段逗号处拆成两条短气泡
-        if expanded.len() == 1
-            && out_parts.len() + parts.len().saturating_sub(idx) < 5
-            && out_parts.len() + 2 <= MAX_REPLY_PARTS
+        // 只有模型整轮只给了 1 段、且这段仍是 1 条时，才在中段逗号处拆成两条短气泡
+        if single_model_part
+            && expanded.len() == 1
             && let Some((left, right)) = maybe_split_mid_comma(&expanded[0])
         {
             expanded = vec![left, right];
@@ -339,7 +346,51 @@ pub fn humanize_chat_parts(
         }
     }
 
+    // 纯日常闲聊（没有代码/链接/步骤，且每条都是短句）最多发 CHAT_MAX_BUBBLES 条，
+    // 防止一次连发四五条像机关枪；正经长内容不受此限制，避免丢信息。
+    let all_short_chat = !any_structured
+        && out_parts
+            .iter()
+            .all(|p| p.chars().count() <= CHAT_SHORT_PART_CHARS);
+    if all_short_chat && out_parts.len() > CHAT_MAX_BUBBLES {
+        out_parts.truncate(CHAT_MAX_BUBBLES);
+        out_quotes.truncate(CHAT_MAX_BUBBLES);
+    }
+
     (out_parts, out_quotes)
+}
+
+/// 日常闲聊一轮最多发几条文字气泡。
+pub const CHAT_MAX_BUBBLES: usize = 3;
+/// 不超过这个字数的段落算“短闲聊句”。
+pub const CHAT_SHORT_PART_CHARS: usize = 40;
+
+/// 表情包冷却：按“机器人连续发言为一轮”切分最近的群消息（旧→新），
+/// 只要最近 `rounds` 轮机器人发言里出现过表情包，本轮就不再附带表情。
+/// `history` 每项为 `(是否机器人发言, 是否表情包)`。
+pub fn sticker_on_cooldown(history: &[(bool, bool)], rounds: usize) -> bool {
+    let mut seen_rounds = 0usize;
+    let mut in_bot_round = false;
+    let mut round_has_sticker = false;
+    for &(is_bot, is_sticker) in history.iter().rev() {
+        if is_bot {
+            if !in_bot_round {
+                in_bot_round = true;
+                round_has_sticker = false;
+            }
+            round_has_sticker |= is_sticker;
+        } else if in_bot_round {
+            if round_has_sticker {
+                return true;
+            }
+            seen_rounds += 1;
+            in_bot_round = false;
+            if seen_rounds >= rounds {
+                return false;
+            }
+        }
+    }
+    in_bot_round && round_has_sticker
 }
 
 fn clean_parts(parts: &[String]) -> Vec<String> {
@@ -912,6 +963,7 @@ mod tests {
 
     #[test]
     fn humanize_splits_mid_period_and_long_comma_preserving_quote_on_first_piece() {
+        // 模型已经分了多段：不再额外拆，句中句号换成逗号
         let parts = vec![
             "好像确实是这样。你可以先试试重启。".to_string(),
             "刚才刷到那个视频真的笑死我了，你也快去看看评论区吧，太离谱了。".to_string(),
@@ -921,16 +973,82 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                "好像确实是这样",
-                "你可以先试试重启",
-                "刚才刷到那个视频真的笑死我了",
-                "你也快去看看评论区吧，太离谱了",
+                "好像确实是这样，你可以先试试重启",
+                "刚才刷到那个视频真的笑死我了，你也快去看看评论区吧，太离谱了",
             ]
         );
-        assert_eq!(
-            out_q,
-            vec![Some("m1".to_string()), None, Some("m2".to_string()), None,]
+        assert_eq!(out_q, vec![Some("m1".to_string()), Some("m2".to_string())]);
+
+        // 模型只给了 1 段：句中句号拆短句，引用只挂第一条
+        let (out, out_q) = humanize_chat_parts(
+            &["好像确实是这样。你可以先试试重启。".to_string()],
+            &[Some("m1".to_string())],
         );
+        assert_eq!(out, vec!["好像确实是这样", "你可以先试试重启"]);
+        assert_eq!(out_q, vec![Some("m1".to_string()), None]);
+
+        // 模型只给了 1 段偏长闲聊：在中段逗号处拆成两条
+        let (out, _) = humanize_chat_parts(
+            &["刚才刷到那个视频真的笑死我了，你也快去看看评论区吧，太离谱了。".to_string()],
+            &[None],
+        );
+        assert_eq!(
+            out,
+            vec![
+                "刚才刷到那个视频真的笑死我了",
+                "你也快去看看评论区吧，太离谱了"
+            ]
+        );
+    }
+
+    #[test]
+    fn humanize_caps_short_chat_at_three_bubbles_but_not_structured_replies() {
+        let chat: Vec<String> = [
+            "这绝对是菜青虫吧……救命",
+            "食堂阿姨加餐了属于是",
+            "这盘菜千万别吃了",
+            "快去换一份",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (out, q) = humanize_chat_parts(&chat, &vec![None; 4]);
+        assert_eq!(out.len(), CHAT_MAX_BUBBLES);
+        assert_eq!(q.len(), CHAT_MAX_BUBBLES);
+        assert_eq!(out[0], "这绝对是菜青虫吧……救命");
+
+        let mut tech = chat.clone();
+        tech.push("1. 先重启服务".to_string());
+        let (out, _) = humanize_chat_parts(&tech, &vec![None; 5]);
+        assert_eq!(out.len(), 5, "带步骤的正经回复不能被截断");
+    }
+
+    #[test]
+    fn sticker_cooldown_looks_back_three_bot_rounds() {
+        // (是否机器人, 是否表情)，旧→新
+        let recent_sticker = [(false, false), (true, false), (true, true), (false, false)];
+        assert!(sticker_on_cooldown(&recent_sticker, 3));
+        let old_sticker = [
+            (true, true),
+            (false, false),
+            (true, false),
+            (false, false),
+            (true, false),
+            (false, false),
+            (true, false),
+            (false, false),
+        ];
+        assert!(!sticker_on_cooldown(&old_sticker, 3));
+        let third_round = [
+            (true, true),
+            (false, false),
+            (true, false),
+            (false, false),
+            (true, false),
+            (false, false),
+        ];
+        assert!(sticker_on_cooldown(&third_round, 3));
+        assert!(!sticker_on_cooldown(&[], 3));
     }
 
     #[test]

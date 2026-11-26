@@ -821,15 +821,19 @@ impl App {
         });
 
         // Proactive daytime chat scheduler: between 09:00 and 23:00 (UTC+8), randomly
-        // every 1–3 hours when a group is quiet, trigger an autonomous topic / Bilibili
-        // share turn. Pauses after 2 consecutive unanswered proactive turns until a
-        // group member speaks again.
+        // every 3–6 hours when a group is quiet, offer an autonomous topic / Bilibili
+        // share turn (the model may decline). At most PROACTIVE_DAILY_MAX per day, and
+        // one unanswered proactive turn pauses it until a group member speaks again.
         let proactive_self = Arc::clone(&self);
         tokio::spawn(async move {
             struct ProactiveGroupState {
                 next_due_at: i64,
                 unanswered_count: u32,
                 last_seen_user_msg_id: i64,
+                /// 北京时间的“第几天”，用来按天清零当天冒泡次数。
+                day: i64,
+                /// 当天已经主动冒泡的次数。
+                today_count: u32,
             }
             let mut states: std::collections::HashMap<String, ProactiveGroupState> =
                 std::collections::HashMap::new();
@@ -842,7 +846,8 @@ impl App {
                     .unwrap_or(0);
                 let mixed = (nanos ^ seed_counter.wrapping_mul(0x9E37_79B9_7F4A_7C15))
                     .wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                3600 + (mixed % 7201) as i64
+                // 两次主动冒泡之间随机间隔 3～6 小时
+                10_800 + (mixed % 10_801) as i64
             };
 
             loop {
@@ -871,13 +876,20 @@ impl App {
                     let last_user_ts = last_user_msg.map(|m| m.created_at).unwrap_or(now);
 
                     let delay = random_delay();
+                    let bj_day = (now + 8 * 3600).div_euclid(86_400);
                     let state = states.entry(group.group_id.clone()).or_insert_with(|| {
                         ProactiveGroupState {
                             next_due_at: now + delay,
                             unanswered_count: 0,
                             last_seen_user_msg_id: last_user_id,
+                            day: bj_day,
+                            today_count: 0,
                         }
                     });
+                    if state.day != bj_day {
+                        state.day = bj_day;
+                        state.today_count = 0;
+                    }
 
                     if last_user_id > state.last_seen_user_msg_id {
                         state.last_seen_user_msg_id = last_user_id;
@@ -888,7 +900,11 @@ impl App {
                         }
                     }
 
-                    if state.unanswered_count >= 2 || now < state.next_due_at {
+                    // 冒过一次泡没人接话，就等到有人说话之前都不再冒；每天最多冒 2 次
+                    if state.unanswered_count >= 1
+                        || state.today_count >= PROACTIVE_DAILY_MAX
+                        || now < state.next_due_at
+                    {
                         continue;
                     }
 
@@ -922,7 +938,7 @@ impl App {
                         .await
                         .unwrap_or_else(|_| "u1".to_string());
                     let msg_id = format!("proactive-{}-{now}", group.group_id);
-                    let text = "【系统内部主动冒泡触发（群友不可见，切勿引用m1，切勿提起系统或主人）】群里安静了一会儿，像普通群友闲着没事随手冒个泡一样，很随意地聊一句眼前想到的事，或者先用 call_mcp_tool 调用 bilibili_browse(mode=\"popular\") 或 bilibili_browse(mode=\"comments\") 逛一下B站，看到真觉得有意思的视频或神评再顺口分享一两句（顺手把好玩的表情包收进图库发一张也行；有感触偶尔调 qzone_publish 发条随手记）。严禁像主持人报时一样喊“大家下午好呀”或一口气播报多个视频，短句自然别带句号，quote_ref 必须留空".to_string();
+                    let text = "【系统内部主动冒泡触发（群友不可见，切勿引用m1，切勿提起系统或主人）】群里安静了一会儿。只有当你真有一件具体想说的事时才开口，没有就直接 should_reply=false，不冒泡完全没关系。可以说的事例如：先用 call_mcp_tool 调用 bilibili_browse(mode=\"popular\") 或 bilibili_browse(mode=\"comments\") 逛B站，真刷到有意思的视频或神评就随手分享一两句；或者用 memory_search 翻翻群里前几天聊过的事，顺口接一句后续（比如问问某件事后来怎么样了）。严禁对全群提问式寒暄（如“大家在干嘛呀”“中午都吃啥呀”“今晚都在忙什么”），严禁报时开场（如“一眨眼到饭点了”“不知不觉九点了”），严禁一口气播报多个视频。最多两条短句，别带句号，quote_ref 必须留空".to_string();
                     let synthetic = crate::onebot::normalize::IncomingMessage {
                         bot_id: proactive_self.config.bot_id.clone(),
                         group_id: group.group_id.clone(),
@@ -955,6 +971,7 @@ impl App {
                             .await
                         {
                             state.unanswered_count += 1;
+                            state.today_count += 1;
                             state.next_due_at = now + random_delay();
                             let _ = proactive_self
                                 .store
@@ -987,6 +1004,9 @@ use axum::response::IntoResponse;
 
 /// How often the raw-log folder runs.
 const FOLD_INTERVAL: Duration = Duration::from_secs(600);
+
+/// 每个群每天最多主动冒泡几次。
+const PROACTIVE_DAILY_MAX: u32 = 2;
 
 /// Record one group's fold attempt in the audit log.
 ///
