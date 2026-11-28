@@ -18,35 +18,6 @@ use crate::store::{
 pub const MAX_SECTION_CHARS: usize = 160;
 /// Maximum member profiles refreshed in a single 10-minute background pass.
 pub const MAX_PROFILES_PER_PASS: usize = 2;
-/// 主人默认初始好感度（较高起点，仍可随日常互动小幅浮动）。
-pub const OWNER_DEFAULT_AFFINITY: i64 = 75;
-/// 普通群友默认初始好感度。
-pub const MEMBER_DEFAULT_AFFINITY: i64 = 30;
-/// 主人好感度最低保护下限。
-pub const OWNER_MIN_AFFINITY: i64 = 25;
-/// 同一群友触发好感度变化的冷却间隔（秒）。
-pub const AFFINITY_COOLDOWN_SECS: i64 = 300;
-/// 单个群友每天累计上升上限。
-pub const AFFINITY_DAILY_GAIN_CAP: i64 = 8;
-/// 单个群友每天累计下降上限。
-pub const AFFINITY_DAILY_LOSS_CAP: i64 = 6;
-
-/// 将 0..=100 的好感度映射为“温和阶梯”阶段名称与说话提示（低好感仍维持基本礼貌）。
-pub fn affinity_stage(score: i64) -> (&'static str, &'static str) {
-    match score {
-        ..=19 => (
-            "有点疏离",
-            "保持基本礼貌和分寸，回答简短克制，不主动热络开玩笑",
-        ),
-        20..=39 => ("点头之交", "自然礼貌、温和随和，像刚混熟不久的普通群友"),
-        40..=64 => ("熟人朋友", "轻松自在、自然接梗，像平时常聊天的朋友"),
-        65..=84 => ("很熟的朋友", "更熟络亲近、会记着对方的小事、开玩笑更放得开"),
-        85.. => (
-            "特别铁的好友",
-            "信任感很强、明显更偏爱惦记，语气松弛又带熟稔感",
-        ),
-    }
-}
 
 #[derive(Debug, Deserialize)]
 struct ProfileDraft {
@@ -278,22 +249,22 @@ pub fn render_cognitive_context(
             out.push_str(&format!("- [{}] {}\n", pin.pin_ref, pin.content.trim()));
         }
     }
-    if !speaker_profiles.is_empty() {
+    let non_empty_profiles: Vec<&(String, MemberProfileRecord)> = speaker_profiles
+        .iter()
+        .filter(|(_, p)| p.has_content())
+        .collect();
+    if !non_empty_profiles.is_empty() {
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(
-            "【本轮发言群友侧写与好感档案（只读参考，严禁当众背诵或直接报出好感数字）】：\n",
-        );
-        for (speaker_ref, p) in speaker_profiles {
+        out.push_str("【本轮发言群友侧写档案（只读背景参考，切勿生硬背诵）】：\n");
+        for (speaker_ref, p) in non_empty_profiles {
             let name_part = if p.display_name.trim().is_empty() {
                 speaker_ref.clone()
             } else {
                 format!("{speaker_ref}（{}）", p.display_name.trim())
             };
-            let (stage, hint) = affinity_stage(p.affinity);
-            let mut parts: Vec<String> =
-                vec![format!("关系：{stage}（好感{}/100，{hint}）", p.affinity)];
+            let mut parts: Vec<String> = Vec::new();
             if !p.identity_tags.trim().is_empty() {
                 parts.push(format!("身份：{}", p.identity_tags.trim()));
             }
@@ -310,48 +281,4 @@ pub fn render_cognitive_context(
         }
     }
     if out.is_empty() { None } else { Some(out) }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn affinity_stage_covers_five_gentle_tiers() {
-        assert_eq!(affinity_stage(0).0, "有点疏离");
-        assert_eq!(affinity_stage(19).0, "有点疏离");
-        assert_eq!(affinity_stage(20).0, "点头之交");
-        assert_eq!(affinity_stage(39).0, "点头之交");
-        assert_eq!(affinity_stage(40).0, "熟人朋友");
-        assert_eq!(affinity_stage(64).0, "熟人朋友");
-        assert_eq!(affinity_stage(65).0, "很熟的朋友");
-        assert_eq!(affinity_stage(84).0, "很熟的朋友");
-        assert_eq!(affinity_stage(85).0, "特别铁的好友");
-        assert_eq!(affinity_stage(100).0, "特别铁的好友");
-    }
-
-    #[test]
-    fn cognitive_context_renders_affinity_even_when_text_sections_empty() {
-        let profile = MemberProfileRecord {
-            bot_id: "b".into(),
-            group_id: "g".into(),
-            user_id: "u1".into(),
-            display_name: "阿明".into(),
-            identity_tags: String::new(),
-            interests: String::new(),
-            personality_notes: String::new(),
-            recent_status: String::new(),
-            affinity: OWNER_DEFAULT_AFFINITY,
-            affinity_daily_day: 0,
-            affinity_daily_gain: 0,
-            affinity_daily_loss: 0,
-            affinity_last_at: 0,
-            source_msg_id: 0,
-            updated_at: 0,
-        };
-        let rendered = render_cognitive_context(&[], &[("u1".into(), profile)])
-            .expect("有好感度档案时应渲染认知上下文");
-        assert!(rendered.contains("u1（阿明）"));
-        assert!(rendered.contains("很熟的朋友（好感75/100"));
-    }
 }

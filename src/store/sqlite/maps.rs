@@ -135,11 +135,6 @@ pub(super) fn map_member_profile(r: sqlx::sqlite::SqliteRow) -> MemberProfileRec
         interests: r.get("interests"),
         personality_notes: r.get("personality_notes"),
         recent_status: r.get("recent_status"),
-        affinity: r.get("affinity"),
-        affinity_daily_day: r.get("affinity_daily_day"),
-        affinity_daily_gain: r.get("affinity_daily_gain"),
-        affinity_daily_loss: r.get("affinity_daily_loss"),
-        affinity_last_at: r.get("affinity_last_at"),
         source_msg_id: r.get("source_msg_id"),
         updated_at: r.get("updated_at"),
     }

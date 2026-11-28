@@ -315,55 +315,6 @@ impl TurnExecutor {
             }
         }
 
-        // 好感度小幅变动同样不受本轮是否沉默影响，由存储层强制冷却与日限防刷。
-        let affinity_now = crate::now_unix();
-        for op in &validated.output.affinity_ops {
-            let Some(speaker) = messages
-                .iter()
-                .find(|message| message.speaker_ref == op.subject_ref)
-            else {
-                continue;
-            };
-            if speaker.sender_id.is_empty() || speaker.sender_id == self.bot_id {
-                continue;
-            }
-            let is_owner = speaker.speaker_role == SpeakerRole::Owner;
-            if let Ok(outcome) = self
-                .store
-                .apply_affinity_delta(
-                    &self.bot_id,
-                    &job.group_id,
-                    &speaker.sender_id,
-                    &speaker.display_name,
-                    is_owner,
-                    op.delta,
-                    affinity_now,
-                )
-                .await
-            {
-                let action = match outcome.skipped_reason {
-                    None => format!(
-                        "affinity.change.g{}.ref{}.d{}.v{}",
-                        job.group_id, op.subject_ref, outcome.applied_delta, outcome.after
-                    ),
-                    Some(why) => format!(
-                        "affinity.skipped.g{}.ref{}.{why}",
-                        job.group_id, op.subject_ref
-                    ),
-                };
-                let _ = self
-                    .store
-                    .audit(
-                        "system",
-                        &action,
-                        Some(&self.bot_id),
-                        Some(&job.group_id),
-                        affinity_now,
-                    )
-                    .await;
-            }
-        }
-
         // JSON sticker_ops is send-only. Library membership is MCP `sticker_keep`.
         let mut sticker_sends: Vec<String> = Vec::new();
         for op in &validated.output.sticker_ops {

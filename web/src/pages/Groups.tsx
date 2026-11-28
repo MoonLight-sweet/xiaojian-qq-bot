@@ -289,7 +289,6 @@ function Profiles({ groupId }: { groupId: string }) {
     interests: "",
     personality_notes: "",
     recent_status: "",
-    affinity: "30",
   });
 
   if (loading) return <Loading />;
@@ -304,16 +303,11 @@ function Profiles({ groupId }: { groupId: string }) {
       interests: p.interests,
       personality_notes: p.personality_notes,
       recent_status: p.recent_status,
-      affinity: String(p.affinity ?? 30),
     });
   }
 
   async function saveEdit(userId: string) {
-    const parsedAffinity = Number.parseInt(form.affinity, 10);
-    await apiSend("PUT", `/groups/${groupId}/profiles/${encodeURIComponent(userId)}`, {
-      ...form,
-      affinity: Number.isFinite(parsedAffinity) ? parsedAffinity : undefined,
-    });
+    await apiSend("PUT", `/groups/${groupId}/profiles/${encodeURIComponent(userId)}`, form);
     setEditingId(null);
     await reload();
   }
@@ -367,16 +361,6 @@ function Profiles({ groupId }: { groupId: string }) {
                     onChange={(e) => setForm({ ...form, recent_status: e.target.value })}
                   />
                 </label>
-                <label>
-                  好感度 (0-100)：
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={form.affinity}
-                    onChange={(e) => setForm({ ...form, affinity: e.target.value })}
-                  />
-                </label>
                 <div>
                   <button type="button" onClick={() => void saveEdit(p.user_id)}>
                     保存
@@ -390,7 +374,6 @@ function Profiles({ groupId }: { groupId: string }) {
               <>
                 <span>
                   <span className="tag">{p.speaker_ref ?? "群友"}</span>{" "}
-                  <span className="tag">{p.affinity_stage} · {p.affinity}</span>{" "}
                   <strong>{p.display_name || p.user_id}</strong>
                   <span className="muted">（QQ: {p.user_id}）</span>
                   <br />

@@ -218,9 +218,7 @@ impl SqliteStore {
     ) -> BotResult<Vec<MemberProfileRecord>> {
         let rows = sqlx::query(
             "SELECT bot_id, group_id, user_id, display_name, identity_tags,
-                    interests, personality_notes, recent_status,
-                    affinity, affinity_daily_day, affinity_daily_gain, affinity_daily_loss, affinity_last_at,
-                    source_msg_id, updated_at
+                    interests, personality_notes, recent_status, source_msg_id, updated_at
              FROM member_profiles WHERE bot_id = ? AND group_id = ?
              ORDER BY updated_at DESC, user_id ASC",
         )
@@ -240,9 +238,7 @@ impl SqliteStore {
     ) -> BotResult<Option<MemberProfileRecord>> {
         let row = sqlx::query(
             "SELECT bot_id, group_id, user_id, display_name, identity_tags,
-                    interests, personality_notes, recent_status,
-                    affinity, affinity_daily_day, affinity_daily_gain, affinity_daily_loss, affinity_last_at,
-                    source_msg_id, updated_at
+                    interests, personality_notes, recent_status, source_msg_id, updated_at
              FROM member_profiles WHERE bot_id = ? AND group_id = ? AND user_id = ?",
         )
         .bind(bot_id)
@@ -253,7 +249,7 @@ impl SqliteStore {
         Ok(row.map(map_member_profile))
     }
 
-    /// Upsert a member's 4-section profile record (preserving accumulated affinity).
+    /// Upsert a member's 4-section profile record.
     #[allow(clippy::too_many_arguments)]
     pub async fn upsert_member_profile(
         &self,
@@ -295,180 +291,6 @@ impl SqliteStore {
         .execute(&self.pool)
         .await?;
         Ok(())
-    }
-
-    /// 对群友应用一次好感度增减，强制执行单次幅度(-3..=3)、300秒冷却、日上限(+8/-6)与总分钳制。
-    #[allow(clippy::too_many_arguments)]
-    pub async fn apply_affinity_delta(
-        &self,
-        bot_id: &str,
-        group_id: &str,
-        user_id: &str,
-        display_name: &str,
-        is_owner: bool,
-        raw_delta: i64,
-        now: i64,
-    ) -> BotResult<crate::store::AffinityApplyResult> {
-        use crate::memory::profiles::{
-            AFFINITY_COOLDOWN_SECS, AFFINITY_DAILY_GAIN_CAP, AFFINITY_DAILY_LOSS_CAP,
-            MEMBER_DEFAULT_AFFINITY, OWNER_DEFAULT_AFFINITY, OWNER_MIN_AFFINITY,
-        };
-        let init_score = if is_owner {
-            OWNER_DEFAULT_AFFINITY
-        } else {
-            MEMBER_DEFAULT_AFFINITY
-        };
-        sqlx::query(
-            "INSERT OR IGNORE INTO member_profiles (
-                bot_id, group_id, user_id, display_name, affinity, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(bot_id)
-        .bind(group_id)
-        .bind(user_id)
-        .bind(display_name)
-        .bind(init_score)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-
-        let row = self
-            .get_member_profile(bot_id, group_id, user_id)
-            .await?
-            .ok_or_else(|| crate::error::BotError::Message("member_profile missing".into()))?;
-        let before = row.affinity;
-
-        let clamped_delta = raw_delta.clamp(-3, 3);
-        if clamped_delta == 0 {
-            return Ok(crate::store::AffinityApplyResult {
-                before,
-                after: before,
-                applied_delta: 0,
-                skipped_reason: Some("zero"),
-            });
-        }
-        if row.affinity_last_at > 0
-            && now.saturating_sub(row.affinity_last_at) < AFFINITY_COOLDOWN_SECS
-        {
-            return Ok(crate::store::AffinityApplyResult {
-                before,
-                after: before,
-                applied_delta: 0,
-                skipped_reason: Some("cooldown"),
-            });
-        }
-
-        let bj_day = (now + 8 * 3600).div_euclid(86_400);
-        let (mut daily_gain, mut daily_loss) = if row.affinity_daily_day == bj_day {
-            (row.affinity_daily_gain, row.affinity_daily_loss)
-        } else {
-            (0, 0)
-        };
-
-        let bounded_delta = if clamped_delta > 0 {
-            let room = (AFFINITY_DAILY_GAIN_CAP - daily_gain).max(0);
-            if room <= 0 {
-                return Ok(crate::store::AffinityApplyResult {
-                    before,
-                    after: before,
-                    applied_delta: 0,
-                    skipped_reason: Some("daily_cap"),
-                });
-            }
-            clamped_delta.min(room)
-        } else {
-            let room = (AFFINITY_DAILY_LOSS_CAP - daily_loss).max(0);
-            if room <= 0 {
-                return Ok(crate::store::AffinityApplyResult {
-                    before,
-                    after: before,
-                    applied_delta: 0,
-                    skipped_reason: Some("daily_cap"),
-                });
-            }
-            -((-clamped_delta).min(room))
-        };
-
-        let min_score = if is_owner { OWNER_MIN_AFFINITY } else { 0 };
-        let after = (before + bounded_delta).clamp(min_score, 100);
-        let applied_delta = after - before;
-        if applied_delta == 0 {
-            return Ok(crate::store::AffinityApplyResult {
-                before,
-                after,
-                applied_delta: 0,
-                skipped_reason: Some("clamped"),
-            });
-        }
-
-        if applied_delta > 0 {
-            daily_gain += applied_delta;
-        } else {
-            daily_loss += -applied_delta;
-        }
-
-        sqlx::query(
-            "UPDATE member_profiles
-             SET display_name = CASE WHEN ? != '' THEN ? ELSE display_name END,
-                 affinity = ?,
-                 affinity_daily_day = ?,
-                 affinity_daily_gain = ?,
-                 affinity_daily_loss = ?,
-                 affinity_last_at = ?,
-                 updated_at = ?
-             WHERE bot_id = ? AND group_id = ? AND user_id = ?",
-        )
-        .bind(display_name)
-        .bind(display_name)
-        .bind(after)
-        .bind(bj_day)
-        .bind(daily_gain)
-        .bind(daily_loss)
-        .bind(now)
-        .bind(now)
-        .bind(bot_id)
-        .bind(group_id)
-        .bind(user_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(crate::store::AffinityApplyResult {
-            before,
-            after,
-            applied_delta,
-            skipped_reason: None,
-        })
-    }
-
-    /// 由管理面板人工设置群友当前好感度（0..=100）。
-    pub async fn set_member_affinity(
-        &self,
-        bot_id: &str,
-        group_id: &str,
-        user_id: &str,
-        display_name: &str,
-        affinity: i64,
-        now: i64,
-    ) -> BotResult<i64> {
-        let clamped = affinity.clamp(0, 100);
-        sqlx::query(
-            "INSERT INTO member_profiles (
-                bot_id, group_id, user_id, display_name, affinity, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT(bot_id, group_id, user_id) DO UPDATE SET
-                display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE member_profiles.display_name END,
-                affinity = excluded.affinity,
-                updated_at = excluded.updated_at",
-        )
-        .bind(bot_id)
-        .bind(group_id)
-        .bind(user_id)
-        .bind(display_name)
-        .bind(clamped)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-        Ok(clamped)
     }
 
     /// Delete one member's profile record.
@@ -1026,100 +848,4 @@ async fn bump_revision(
     .execute(&mut **tx)
     .await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod affinity_tests {
-    use crate::memory::profiles::{
-        MEMBER_DEFAULT_AFFINITY, OWNER_DEFAULT_AFFINITY, OWNER_MIN_AFFINITY,
-    };
-    use crate::store::SqliteStore;
-    use crate::store::migrations;
-
-    #[tokio::test]
-    async fn affinity_delta_respects_defaults_cooldown_daily_caps_and_upsert_preservation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pool = migrations::open_temp(dir.path()).await.expect("migrate");
-        let store = SqliteStore::new(pool);
-
-        // 主人从 75 起步并受 +3 单次钳制
-        let r1 = store
-            .apply_affinity_delta("b", "g", "owner_1", "主人", true, 5, 1_000_000)
-            .await
-            .expect("apply owner");
-        assert_eq!(r1.before, OWNER_DEFAULT_AFFINITY);
-        assert_eq!(r1.applied_delta, 3);
-        assert_eq!(r1.after, 78);
-        assert_eq!(r1.skipped_reason, None);
-
-        // 300 秒内再次调整触发冷却拦截
-        let r_cool = store
-            .apply_affinity_delta("b", "g", "owner_1", "主人", true, 2, 1_000_200)
-            .await
-            .expect("cooldown");
-        assert_eq!(r_cool.skipped_reason, Some("cooldown"));
-        assert_eq!(r_cool.after, 78);
-
-        // 史官刷新四段侧写绝不能冲掉好感度
-        store
-            .upsert_member_profile(
-                "b", "g", "owner_1", "主人", "身份", "喜好", "性格", "动态", 10, 1_000_250,
-            )
-            .await
-            .expect("upsert profile");
-        let prof = store
-            .get_member_profile("b", "g", "owner_1")
-            .await
-            .expect("get")
-            .expect("exists");
-        assert_eq!(prof.affinity, 78);
-
-        // 同一天继续加分受日上限 +8 约束（已有 +3，再 +3 -> +3 截断为 +2）
-        let r2 = store
-            .apply_affinity_delta("b", "g", "owner_1", "主人", true, 3, 1_000_350)
-            .await
-            .expect("second gain");
-        assert_eq!(r2.applied_delta, 3);
-        let r3 = store
-            .apply_affinity_delta("b", "g", "owner_1", "主人", true, 3, 1_000_700)
-            .await
-            .expect("third gain capped");
-        assert_eq!(r3.applied_delta, 2);
-        assert_eq!(r3.after, 83);
-        let r4 = store
-            .apply_affinity_delta("b", "g", "owner_1", "主人", true, 1, 1_001_100)
-            .await
-            .expect("cap reached");
-        assert_eq!(r4.skipped_reason, Some("daily_cap"));
-
-        // 跨日后额度清零，普通群友从 30 起步，日扣分上限 -6
-        let m1 = store
-            .apply_affinity_delta("b", "g", "mem_1", "阿明", false, -3, 1_000_000)
-            .await
-            .expect("member loss 1");
-        assert_eq!(m1.before, MEMBER_DEFAULT_AFFINITY);
-        assert_eq!(m1.after, 27);
-        let m2 = store
-            .apply_affinity_delta("b", "g", "mem_1", "阿明", false, -3, 1_000_400)
-            .await
-            .expect("member loss 2");
-        assert_eq!(m2.after, 24);
-        let m3 = store
-            .apply_affinity_delta("b", "g", "mem_1", "阿明", false, -1, 1_000_800)
-            .await
-            .expect("member loss cap");
-        assert_eq!(m3.skipped_reason, Some("daily_cap"));
-
-        // 主人低保护下限 25
-        store
-            .set_member_affinity("b", "g", "owner_1", "主人", 26, 1_100_000)
-            .await
-            .expect("set low owner affinity");
-        let r_floor = store
-            .apply_affinity_delta("b", "g", "owner_1", "主人", true, -3, 1_200_000)
-            .await
-            .expect("owner floor");
-        assert_eq!(r_floor.after, OWNER_MIN_AFFINITY);
-        assert_eq!(r_floor.applied_delta, -1);
-    }
 }

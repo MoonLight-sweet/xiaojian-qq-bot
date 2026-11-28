@@ -36,12 +36,6 @@ pub const STICKER_HASH_CHARS: usize = 64;
 pub const MAX_STICKER_REASON_CHARS: usize = 120;
 /// Maximum source refs per memory proposal.
 pub const MAX_SOURCE_REFS: usize = 8;
-/// 单轮最多提交的好感度调整条数。
-pub const MAX_AFFINITY_OPS: usize = 4;
-/// 单次好感度增减幅度上限（实际允许 `-3..=3`）。
-pub const MAX_AFFINITY_DELTA: i64 = 3;
-/// 好感度变动原因说明的最大字符数。
-pub const MAX_AFFINITY_REASON_CHARS: usize = 80;
 
 /// Allowed `kind` values for memory facts.
 pub const MEMORY_KINDS: [&str; 5] = ["fact", "preference", "topic", "relation", "event"];
@@ -73,9 +67,6 @@ pub struct AgentOutputRaw {
     /// per turn; the turn resolves it to a QQ id inside this batch only.
     #[serde(default)]
     pub poke_ref: Option<String>,
-    /// 本轮对群友的好感度小幅调整提议（-3..=3）。
-    #[serde(default)]
-    pub affinity_ops: Option<Vec<AffinityOpRaw>>,
 }
 
 /// One reply part as the model may send it: a bare string (the historic
@@ -136,24 +127,6 @@ pub struct NicknameRaw {
     pub subject_ref: Option<String>,
     #[serde(default)]
     pub alias: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AffinityOpRaw {
-    #[serde(default)]
-    pub subject_ref: Option<String>,
-    #[serde(default)]
-    pub delta: Option<i64>,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-/// 通过校验的单条好感度调整提案（仍只携带批内别名）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AffinityOp {
-    pub subject_ref: String,
-    pub delta: i64,
-    pub reason: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -266,8 +239,6 @@ pub struct AgentOutput {
     /// Validated poke target (`speaker_ref` inside this batch), if any. The
     /// turn resolves it to a QQ id and fires one `send_poke`.
     pub poke_ref: Option<String>,
-    /// 通过校验的好感度微调提案列表。
-    pub affinity_ops: Vec<AffinityOp>,
 }
 
 /// One validated per-part quote.
@@ -537,9 +508,6 @@ pub fn validate_value(value: &Value, scope: &ValidationScope) -> Result<Validate
 
     let nicknames = validate_nicknames(raw.nicknames.unwrap_or_default(), scope, &mut rejections);
 
-    let affinity_ops =
-        validate_affinity_ops(raw.affinity_ops.unwrap_or_default(), scope, &mut rejections);
-
     let part_quotes = validate_part_quotes(raw_part_quotes, scope, &mut rejections);
 
     // A quote may only point at something this turn actually showed the
@@ -600,7 +568,6 @@ pub fn validate_value(value: &Value, scope: &ValidationScope) -> Result<Validate
             quote_ref,
             part_quotes,
             poke_ref,
-            affinity_ops,
         },
         rejections,
     )
@@ -687,12 +654,6 @@ pub fn validate_with_salvage(
     let memory_ops =
         salvage_memory_ops(value.get("memory_ops"), scope, &mut rejections, &mut report);
     let nicknames = salvage_nicknames(value.get("nicknames"), scope, &mut rejections, &mut report);
-    let affinity_ops = salvage_affinity_ops(
-        value.get("affinity_ops"),
-        scope,
-        &mut rejections,
-        &mut report,
-    );
     let quote_ref = salvage_quote_ref(value.get("quote_ref"), scope, &mut report);
     let poke_ref = salvage_poke_ref(value.get("poke_ref"), scope, should_reply, &mut report);
 
@@ -709,7 +670,6 @@ pub fn validate_with_salvage(
             quote_ref,
             part_quotes,
             poke_ref,
-            affinity_ops,
         },
         rejections,
     )
@@ -753,14 +713,12 @@ mod lenient;
 
 use self::checks::{
     clamp_chars, finish, looks_like_raw_id, normalize_memory_ref, sanitize_alias,
-    validate_affinity_ops, validate_nicknames, validate_op, validate_part_quotes,
-    validate_sticker_ops,
+    validate_nicknames, validate_op, validate_part_quotes, validate_sticker_ops,
 };
 use self::lenient::{
     absorb, lenient_bool, lenient_list, lenient_nickname_raw, lenient_op_raw, lenient_reply_parts,
-    lenient_sticker_raw, lenient_string, salvage_affinity_ops, salvage_memory_ops, salvage_mood,
-    salvage_nicknames, salvage_poke_ref, salvage_quote_ref, salvage_reply_parts, salvage_stickers,
-    salvage_topic,
+    lenient_sticker_raw, lenient_string, salvage_memory_ops, salvage_mood, salvage_nicknames,
+    salvage_poke_ref, salvage_quote_ref, salvage_reply_parts, salvage_stickers, salvage_topic,
 };
 
 #[cfg(test)]

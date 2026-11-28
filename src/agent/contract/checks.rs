@@ -119,65 +119,6 @@ pub(super) fn sanitize_alias(raw: String) -> String {
         .to_string()
 }
 
-/// 校验模型提交的好感度微调提案：仅接受本批成员，单次 delta 必须在 -3..=3 且非零，同一人只取首条。
-pub(super) fn validate_affinity_ops(
-    raw: Vec<AffinityOpRaw>,
-    scope: &ValidationScope,
-    rejections: &mut Rejections,
-) -> Vec<AffinityOp> {
-    let mut out: Vec<AffinityOp> = Vec::new();
-    if raw.len() > MAX_AFFINITY_OPS {
-        rejections.push(RejectReason::TooManyOps);
-    }
-    for op in raw.into_iter().take(MAX_AFFINITY_OPS) {
-        let Some(subject_ref) = op
-            .subject_ref
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-        else {
-            rejections.push(RejectReason::UnknownRef);
-            continue;
-        };
-        if !scope.speaker_refs.iter().any(|r| r == &subject_ref) {
-            rejections.push(if looks_like_raw_id(&subject_ref) {
-                RejectReason::CrossGroup
-            } else {
-                RejectReason::UnknownRef
-            });
-            continue;
-        }
-        let Some(delta) = op.delta else {
-            rejections.push(RejectReason::Malformed);
-            continue;
-        };
-        if delta == 0 || !(-MAX_AFFINITY_DELTA..=MAX_AFFINITY_DELTA).contains(&delta) {
-            rejections.push(RejectReason::Malformed);
-            continue;
-        }
-        if out
-            .iter()
-            .any(|existing| existing.subject_ref == subject_ref)
-        {
-            continue;
-        }
-        let reason = op
-            .reason
-            .unwrap_or_default()
-            .chars()
-            .filter(|ch| !ch.is_control() && !matches!(ch, '\u{2028}' | '\u{2029}' | '\u{feff}'))
-            .take(MAX_AFFINITY_REASON_CHARS)
-            .collect::<String>()
-            .trim()
-            .to_string();
-        out.push(AffinityOp {
-            subject_ref,
-            delta,
-            reason,
-        });
-    }
-    out
-}
-
 /// Validate per-part quotes against the scope: the ref must have been
 /// shown this turn (batch `m…` or history `h…`) and the echo must stay a
 /// snippet, not a paragraph. Bad entries drop softly, like a bad top-level
@@ -234,7 +175,6 @@ impl AgentOutput {
             quote_ref: None,
             part_quotes: Vec::new(),
             poke_ref: None,
-            affinity_ops: Vec::new(),
         }
     }
 }
