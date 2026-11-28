@@ -168,6 +168,64 @@ pub(super) fn salvage_nicknames(
     out
 }
 
+fn lenient_delta(value: Option<&Value>, report: &mut SalvageReport) -> Option<i64> {
+    let parsed = match value? {
+        Value::Number(n) => n.as_i64().or_else(|| {
+            n.as_f64()
+                .filter(|f| f.is_finite())
+                .map(|f| f.round() as i64)
+        }),
+        Value::String(s) => s.trim().parse::<i64>().ok().or_else(|| {
+            s.trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|f| f.is_finite())
+                .map(|f| f.round() as i64)
+        }),
+        _ => None,
+    }?;
+    if parsed == 0 {
+        return None;
+    }
+    if (-MAX_AFFINITY_DELTA..=MAX_AFFINITY_DELTA).contains(&parsed) {
+        Some(parsed)
+    } else {
+        report.clamped += 1;
+        Some(parsed.clamp(-MAX_AFFINITY_DELTA, MAX_AFFINITY_DELTA))
+    }
+}
+
+pub(super) fn salvage_affinity_ops(
+    value: Option<&Value>,
+    scope: &ValidationScope,
+    rejections: &mut Rejections,
+    report: &mut SalvageReport,
+) -> Vec<AffinityOp> {
+    let Some(Value::Array(items)) = value else {
+        return Vec::new();
+    };
+    let mut raw: Vec<AffinityOpRaw> = Vec::new();
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            report.note("affinity_ops", "malformed");
+            continue;
+        };
+        let Some(delta) = lenient_delta(obj.get("delta"), report) else {
+            report.note("affinity_ops", "malformed");
+            continue;
+        };
+        raw.push(AffinityOpRaw {
+            subject_ref: lenient_string(obj.get("subject_ref")),
+            delta: Some(delta),
+            reason: lenient_string(obj.get("reason")),
+        });
+    }
+    let before = rejections.total;
+    let out = validate_affinity_ops(raw, scope, rejections);
+    absorb(rejections, before, "affinity_ops", report);
+    out
+}
+
 /// Mirror the rejections added by one section into the salvage report.
 pub(super) fn absorb(
     rejections: &Rejections,

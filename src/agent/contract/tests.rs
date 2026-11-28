@@ -712,3 +712,33 @@ fn salvage_report_renders_audit_suffix() {
         report.detail()
     );
 }
+
+#[test]
+fn affinity_ops_validate_and_salvage_enforce_bounds_and_scope() {
+    let raw = serde_json::json!({
+        "should_reply": true,
+        "reply_parts": ["好呀"],
+        "affinity_ops": [
+            {"subject_ref": "u1", "delta": 2, "reason": "聊得挺投缘"},
+            {"subject_ref": "u1", "delta": 1, "reason": "同一轮第二条应去重"}
+        ]
+    });
+    let validated = validate_value(&raw, &scope()).expect("合法 affinity_ops 应通过");
+    assert_eq!(validated.output.affinity_ops.len(), 1);
+    assert_eq!(validated.output.affinity_ops[0].delta, 2);
+
+    // 挽救模式：支持字符串数字与浮点，并把超界 delta 钳制到 -3..=3，未知 ref 柔和丢弃
+    let dirty = r#"{
+        "should_reply": true,
+        "reply_parts": ["行"],
+        "affinity_ops": [
+            {"subject_ref": "u1", "delta": "+10", "reason": "超界应被钳成3"},
+            {"subject_ref": "u99", "delta": -1, "reason": "未知成员应丢弃"},
+            {"subject_ref": "u2", "delta": -2.4, "reason": "小数取整"}
+        ]
+    }"#;
+    let (salvaged, _) = validate_salvaged(dirty, &scope()).expect("应成功挽救");
+    assert_eq!(salvaged.output.affinity_ops.len(), 2);
+    assert_eq!(salvaged.output.affinity_ops[0].delta, 3);
+    assert_eq!(salvaged.output.affinity_ops[1].delta, -2);
+}

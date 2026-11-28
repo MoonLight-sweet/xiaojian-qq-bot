@@ -503,7 +503,8 @@ pub const CONTRACT_CARD: &str = "# 合约速记（照此输出）\n\
 - reply_parts 最多 8 段、合计 ≤1000 字、纯文本无 CQ 码；日常闲聊短句发、不打句号「。」、别端客服腔，正经求助再讲透；逐段引用才写对象形，quote_echo 逐字摘自目标原文（≤8 字）。\n\
 - ref 只用本批出现过的 m/h 编号、u 别名与 mem_ 记忆键，不编造；memory_ops 只用于纠错，update 必须带 memory_ref。\n\
 - 时间以本轮标注为准：提示词顶部的「现在」是本轮组批时刻，消息行首的 [HH:MM] 是那条消息的到达时刻。不要自己推算或编造时间、日期、星期。\n\
-- 可以戳一下：poke_ref 填本批某个 speaker_ref，系统会替你戳他一下（打招呼、催他回话、开个玩笑）。一轮最多一个，should_reply 必须为 true；想纯戳不说话就 reply_parts 留空、只带 poke_ref 和贴纸。别连戳，也别拿来骚扰人。";
+- 可以戳一下：poke_ref 填本批某个 speaker_ref，系统会替你戳他一下（打招呼、催他回话、开个玩笑）。一轮最多一个，should_reply 必须为 true；想纯戳不说话就 reply_parts 留空、只带 poke_ref 和贴纸。别连戳，也别拿来骚扰人。\n\
+- 好感度暗中微调：真有触动才填 affinity_ops（[{subject_ref,delta(-3..=3且非0),reason}]），平时留空、聊天绝不报数字。";
 
 /// One merged run of consecutive messages from the same speaker with the same text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -399,16 +399,21 @@ pub(super) async fn list_profiles(
         "group_id": group_id,
         "profiles": profiles
             .into_iter()
-            .map(|p| json!({
-                "user_id": p.user_id,
-                "speaker_ref": alias_for(&p.user_id),
-                "display_name": p.display_name,
-                "identity_tags": p.identity_tags,
-                "interests": p.interests,
-                "personality_notes": p.personality_notes,
-                "recent_status": p.recent_status,
-                "updated_at": p.updated_at,
-            }))
+            .map(|p| {
+                let (stage, _) = crate::memory::profiles::affinity_stage(p.affinity);
+                json!({
+                    "user_id": p.user_id,
+                    "speaker_ref": alias_for(&p.user_id),
+                    "display_name": p.display_name,
+                    "identity_tags": p.identity_tags,
+                    "interests": p.interests,
+                    "personality_notes": p.personality_notes,
+                    "recent_status": p.recent_status,
+                    "affinity": p.affinity,
+                    "affinity_stage": stage,
+                    "updated_at": p.updated_at,
+                })
+            })
             .collect::<Vec<_>>(),
     }))
 }
@@ -425,9 +430,11 @@ pub(super) struct PutProfileRequest {
     personality_notes: String,
     #[serde(default)]
     recent_status: String,
+    #[serde(default)]
+    affinity: Option<i64>,
 }
 
-/// Operator edit or creation of a member's 4-section profile.
+/// Operator edit or creation of a member's 4-section profile (and optional affinity score).
 pub(super) async fn put_profile(
     State(state): State<Arc<AdminState>>,
     AxumPath((group_id, user_id)): AxumPath<(String, String)>,
@@ -454,6 +461,30 @@ pub(super) async fn put_profile(
         )
         .await
         .map_err(|_| ApiError::internal())?;
+    if let Some(score) = input.affinity {
+        let clamped = state
+            .store
+            .set_member_affinity(
+                &state.bot_id,
+                &group_id,
+                &user_id,
+                input.display_name.trim(),
+                score,
+                now,
+            )
+            .await
+            .map_err(|_| ApiError::internal())?;
+        let _ = state
+            .store
+            .audit(
+                ActorKind::Panel.as_str(),
+                &format!("affinity.panel_set.g{group_id}.v{clamped}"),
+                Some(&state.bot_id),
+                Some(&group_id),
+                now,
+            )
+            .await;
+    }
     let _ = state
         .store
         .audit(

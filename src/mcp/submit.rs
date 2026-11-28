@@ -22,7 +22,8 @@
 use serde_json::{Value, json};
 
 use crate::agent::contract::{
-    MAX_MEMORY_OPS, MAX_REPLY_CHARS, MAX_STICKER_OPS, MAX_STICKER_SENDS, is_sticker_hash,
+    MAX_AFFINITY_DELTA, MAX_AFFINITY_OPS, MAX_MEMORY_OPS, MAX_REPLY_CHARS, MAX_STICKER_OPS,
+    MAX_STICKER_SENDS, is_sticker_hash,
 };
 use crate::mcp::Scope;
 use crate::store::SqliteStore;
@@ -95,6 +96,11 @@ pub fn tool_definition() -> Value {
                 "poke_ref": {
                     "type": "string",
                     "description": "想戳一下本批里某个人的 speaker_ref。一轮最多一个，should_reply 必须为 true。"
+                },
+                "affinity_ops": {
+                    "type": "array",
+                    "items": {},
+                    "description": "可选：好感度微调 [{subject_ref, delta(-3..=3且非0), reason}]，有明显拉近或膈应时才填。"
                 }
             },
             "required": ["turn_token", "should_reply"]
@@ -118,7 +124,13 @@ fn normalize_submission(args: &Value) -> Value {
     let Some(obj) = out.as_object_mut() else {
         return out;
     };
-    for field in ["sticker_ops", "memory_ops", "nicknames", "reply_parts"] {
+    for field in [
+        "sticker_ops",
+        "memory_ops",
+        "nicknames",
+        "reply_parts",
+        "affinity_ops",
+    ] {
         let Some(items) = obj.get_mut(field).and_then(Value::as_array_mut) else {
             continue;
         };
@@ -232,6 +244,34 @@ pub fn validate_structure(args: &Value) -> Result<(), String> {
         let ops = ops.as_array().ok_or("memory_ops 必须是数组")?;
         if ops.len() > MAX_MEMORY_OPS {
             return Err(format!("memory_ops 至多 {MAX_MEMORY_OPS} 条"));
+        }
+    }
+
+    if let Some(ops) = obj.get("affinity_ops") {
+        let ops = ops.as_array().ok_or("affinity_ops 必须是数组")?;
+        if ops.len() > MAX_AFFINITY_OPS {
+            return Err(format!("affinity_ops 至多 {MAX_AFFINITY_OPS} 条"));
+        }
+        for op in ops {
+            let map = op
+                .as_object()
+                .ok_or("affinity_ops 的元素必须是 {subject_ref, delta, reason} 对象")?;
+            let subject = map
+                .get("subject_ref")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if subject.is_empty() {
+                return Err("affinity_ops 必须带 speaker_ref 格式的 subject_ref".into());
+            }
+            let Some(delta) = map.get("delta").and_then(Value::as_i64) else {
+                return Err("affinity_ops 的 delta 必须是整数".into());
+            };
+            if delta == 0 || !(-MAX_AFFINITY_DELTA..=MAX_AFFINITY_DELTA).contains(&delta) {
+                return Err(format!(
+                    "affinity_ops 的 delta 必须在 -{MAX_AFFINITY_DELTA}..={MAX_AFFINITY_DELTA} 且不能为 0"
+                ));
+            }
         }
     }
 
@@ -363,6 +403,7 @@ mod tests {
             "sticker_ops",
             "quote_ref",
             "poke_ref",
+            "affinity_ops",
         ];
         let def = tool_definition();
         let props = def
@@ -607,5 +648,33 @@ mod tests {
             .expect("武装");
         let args = json!({"turn_token": "tok", "should_reply": false, "reply_parts": []});
         assert!(is_error(&call_submit(&store, &scope(), &args).await));
+    }
+
+    #[test]
+    fn structure_validates_affinity_ops_shape_and_bounds() {
+        assert!(
+            validate_structure(&json!({
+                "should_reply": true,
+                "reply_parts": ["嗯嗯"],
+                "affinity_ops": [{"subject_ref": "u1", "delta": 2, "reason": "顺手帮忙"}]
+            }))
+            .is_ok()
+        );
+        assert!(
+            validate_structure(&json!({
+                "should_reply": true,
+                "reply_parts": ["嗯嗯"],
+                "affinity_ops": [{"subject_ref": "u1", "delta": 0}]
+            }))
+            .is_err()
+        );
+        assert!(
+            validate_structure(&json!({
+                "should_reply": true,
+                "reply_parts": ["嗯嗯"],
+                "affinity_ops": [{"subject_ref": "u1", "delta": 5}]
+            }))
+            .is_err()
+        );
     }
 }

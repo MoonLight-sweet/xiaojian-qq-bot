@@ -181,6 +181,8 @@ export interface MemberProfile {
   interests: string;
   personality_notes: string;
   recent_status: string;
+  affinity: number;
+  affinity_stage: string;
   updated_at: number;
 }
 

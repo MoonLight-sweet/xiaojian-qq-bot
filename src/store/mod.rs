@@ -202,8 +202,22 @@ pub struct MemberProfileRecord {
     pub interests: String,
     pub personality_notes: String,
     pub recent_status: String,
+    pub affinity: i64,
+    pub affinity_daily_day: i64,
+    pub affinity_daily_gain: i64,
+    pub affinity_daily_loss: i64,
+    pub affinity_last_at: i64,
     pub source_msg_id: i64,
     pub updated_at: i64,
+}
+
+/// 一次好感度增减应用结果（含防刷冷却与日限裁决）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AffinityApplyResult {
+    pub before: i64,
+    pub after: i64,
+    pub applied_delta: i64,
+    pub skipped_reason: Option<&'static str>,
 }
 
 impl MemberProfileRecord {

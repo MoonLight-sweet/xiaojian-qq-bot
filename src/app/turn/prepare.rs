@@ -655,9 +655,32 @@ impl TurnExecutor {
         let mut speaker_profiles: Vec<(String, crate::store::MemberProfileRecord)> = Vec::new();
         for msg in &messages {
             if seen_speakers.insert(msg.sender_id.clone()) {
-                if let Some(prof) = all_profiles.iter().find(|p| p.user_id == msg.sender_id) {
-                    speaker_profiles.push((msg.speaker_ref.clone(), prof.clone()));
-                }
+                let prof = all_profiles
+                    .iter()
+                    .find(|p| p.user_id == msg.sender_id)
+                    .cloned()
+                    .unwrap_or_else(|| crate::store::MemberProfileRecord {
+                        bot_id: self.bot_id.clone(),
+                        group_id: job.group_id.clone(),
+                        user_id: msg.sender_id.clone(),
+                        display_name: msg.display_name.clone(),
+                        identity_tags: String::new(),
+                        interests: String::new(),
+                        personality_notes: String::new(),
+                        recent_status: String::new(),
+                        affinity: if msg.speaker_role == SpeakerRole::Owner {
+                            crate::memory::profiles::OWNER_DEFAULT_AFFINITY
+                        } else {
+                            crate::memory::profiles::MEMBER_DEFAULT_AFFINITY
+                        },
+                        affinity_daily_day: 0,
+                        affinity_daily_gain: 0,
+                        affinity_daily_loss: 0,
+                        affinity_last_at: 0,
+                        source_msg_id: 0,
+                        updated_at: 0,
+                    });
+                speaker_profiles.push((msg.speaker_ref.clone(), prof));
             }
         }
         prompt_batch.cognitive_context =
