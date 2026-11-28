@@ -1177,7 +1177,7 @@ impl TurnExecutor {
             has_image |= message
                 .segments
                 .iter()
-                .any(|s| matches!(s, Segment::Image { .. }));
+                .any(|s| matches!(s, Segment::Image { .. } | Segment::Forward { .. }));
             same_speaker |= last_speaker == Some(message.sender_id.as_str());
         }
         if newest_incoming == i64::MIN {
@@ -1424,7 +1424,7 @@ fn partition_insertable(parsed: &[IncomingMessage]) -> (Vec<usize>, Vec<usize>) 
         if message
             .segments
             .iter()
-            .any(|s| matches!(s, Segment::Image { .. }))
+            .any(|s| matches!(s, Segment::Image { .. } | Segment::Forward { .. }))
         {
             image.push(idx);
         } else {
@@ -1503,5 +1503,18 @@ mod tests {
         let (text, image) = partition_insertable(&batch);
         assert!(text.is_empty());
         assert_eq!(image, vec![0]);
+    }
+
+    #[test]
+    fn partition_holds_forward_messages_for_full_turn() {
+        let batch = vec![
+            msg(vec![text_seg()]),
+            msg(vec![Segment::Forward {
+                id: Some("fwd_1".into()),
+            }]),
+        ];
+        let (text, held) = partition_insertable(&batch);
+        assert_eq!(text, vec![0]);
+        assert_eq!(held, vec![1]);
     }
 }

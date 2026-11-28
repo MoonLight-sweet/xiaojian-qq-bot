@@ -56,6 +56,11 @@ pub enum Segment {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         file: Option<String>,
     },
+    /// A merged forward chat history (`forward`). `id` is used to fetch nodes via `get_forward_msg`.
+    Forward {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     /// A segment type we do not model.
     Unsupported { seg: String },
 }
@@ -267,6 +272,7 @@ pub fn normalize_event(
                 | Segment::Image { .. }
                 | Segment::Voice { .. }
                 | Segment::Video { .. }
+                | Segment::Forward { .. }
         )
     });
     if text.trim().is_empty() && !has_address {
@@ -433,6 +439,9 @@ pub fn normalize_segments(event: &RawEvent, bot_id: &str) -> Vec<Segment> {
                         url: seg.data.as_ref().and_then(|d| d.url.clone()),
                         file: seg.data.as_ref().and_then(|d| d.file.clone()),
                     }),
+                    "forward" => Some(Segment::Forward {
+                        id: seg.data.as_ref().and_then(|d| d.id.clone()),
+                    }),
                     "face" => {
                         let id_str = seg
                             .data
@@ -542,6 +551,7 @@ pub fn plain_text(segments: &[Segment]) -> String {
             Segment::Image { .. } => out.push_str("[图片]"),
             Segment::Voice { .. } => out.push_str("[语音]"),
             Segment::Video { .. } => out.push_str("[短视频]"),
+            Segment::Forward { .. } => out.push_str("[合并转发]"),
             Segment::Unsupported { .. } => {}
         }
     }
@@ -1261,6 +1271,26 @@ mod tests {
                 assert_eq!(m.speaker_ref, "u9");
             }
             other => panic!("期待消息: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forward_segment_is_preserved_with_id_and_placeholder() {
+        let ev = event(
+            r#"{"post_type":"message","message_type":"group","group_id":"100","user_id":"1","message_id":"88","self_id":"999",
+                "message":[{"type":"forward","data":{"id":"7713153798395130636"}}]}"#,
+        );
+        match normalize_event(&ev, BOT, OWNER, "u1", 0) {
+            Normalized::Message(m) => {
+                assert_eq!(m.text, "[合并转发]");
+                assert_eq!(
+                    m.segments[0],
+                    Segment::Forward {
+                        id: Some("7713153798395130636".into())
+                    }
+                );
+            }
+            other => panic!("期待保留纯合并转发消息: {other:?}"),
         }
     }
 }
